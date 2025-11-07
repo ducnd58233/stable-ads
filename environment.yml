@@ -1,0 +1,14 @@
+name: stable-ads
+channels:
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.13
+  - setuptools
+  - uv
+  - cudnn
+  - nvidia::cuda-toolkit
+  - conda-forge::accelerate
+  - pip
+prefix: C:\Users\Admin\miniconda3\envs\stable-ads
