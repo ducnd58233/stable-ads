@@ -11,11 +11,36 @@ ENV_FILE_PATH = os.path.join(BASE_DIR, ".env")
 
 class LLMSettings(BaseModel):
     provider: Literal["openai", "ollama"] = "openai"
+    model: str = "gpt-4o-mini"
     api_key: str | None = None
     base_url: str | None = None
 
+class DiffuserSettings(BaseModel):
+    backend: str
+    device: str
+    dtype: str
+    width: int
+    height: int
+    fps: int
+    seed: int
+    cpu_offload: bool
+    # SVD
+    sdxl_model_id: str | None = None
+    svd_model_id: str | None = None
+    svd_num_frames: int | None = None
+    svd_num_steps: int | None = None
+    svd_motion_bucket: int | None = None
+    svd_decode_chunk: int | None = None
+    # AnimateDiff
+    ad_base_model_id: str | None = None
+    ad_motion_adapter_id: str | None = None
+    ad_steps: int | None = None
+    ad_frames: int | None = None
+    ad_guidance: float | None = None
+
 class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    diffuser: DiffuserSettings = Field(default_factory=DiffuserSettings)
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH,

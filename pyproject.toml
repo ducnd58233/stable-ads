@@ -17,6 +17,8 @@ dependencies = [
     "langchain-openai>=1.0.2",
     "langchain-ollama>=1.0.0",
     "pydantic-settings>=2.11.0",
+    "imageio>=2.37.2",
+    "imageio-ffmpeg>=0.6.0",
 ]
 
 [dependency-groups]

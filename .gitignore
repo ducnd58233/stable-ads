@@ -4,6 +4,7 @@ generated/
 .cursor/
 *.pdf
 *.json
+runs/
 
 
 ### Database ###
