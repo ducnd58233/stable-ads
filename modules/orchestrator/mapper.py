@@ -1,6 +1,5 @@
-from .schema import ScriptSchema
-from core.services.render.backend.dto import BeatSpec, RenderRequest
-
+from .dto import ScriptSchema
+from modules.render import BeatSpec, RenderRequest
 
 def to_render_request(script: ScriptSchema, fps: int) -> RenderRequest:
     beats = [

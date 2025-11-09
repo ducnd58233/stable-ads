@@ -1,0 +1,29 @@
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Mapping, Protocol
+
+
+@dataclass(slots=True)
+class Envelope:
+    topic: str
+    key: bytes | None
+    payload: bytes
+    headers: Mapping[str, str]
+    meta: Any | None
+
+class AsyncPublisher(Protocol):
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+    async def publish(self, envelope: Envelope) -> None: ...
+
+class AsyncSubscriber(Protocol):
+    async def start(self, topics: list[str]) -> None: ...
+    async def stop(self) -> None: ...
+    async def poll(self, timeout_s: float = 1.0) -> Envelope | None: ...
+    async def commit(self, envelope: Envelope) -> None: ...
+
+class Marshaler(Protocol):
+    def dumps(self, obj: Any, *, topic: str, headers: dict[str,str] | None=None) -> Envelope: ...
+    def loads(self, env: Envelope) -> Any: ...
+
+AsyncHandler = Callable[[Any], Awaitable[None]]
+AsyncMiddleware = Callable[[Callable[[Envelope], Awaitable[None]]], Callable[[Envelope], Awaitable[None]]]
