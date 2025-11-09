@@ -1,5 +1,5 @@
 import json, uuid
-from core.infra.mq.registry import register_marshaler
+from .registry import register_marshaler
 from .interfaces import Marshaler, Envelope
 
 @register_marshaler("json")

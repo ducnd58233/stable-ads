@@ -1,4 +1,3 @@
-import asyncio
 from typing import Final
 from core.infra.blob.buckets import Buckets
 from core.infra.container import Infra
@@ -31,7 +30,8 @@ class JobsHandler:
 
         # 1) Run agent
         state = AgentState(job_id=job_id, prompt=prompt, style=style, duration_sec=duration_sec)
-        out = await self._graph.ainvoke(state)
+        out_dict = await self._graph.ainvoke(state)
+        out = AgentState(**out_dict)
         if not out.script:
             await svc.set_failed(job_id)
             return
@@ -41,7 +41,8 @@ class JobsHandler:
 
         # 2) Render to bytes (no local persistent file)
         req = to_render_request(script, fps=self._fps)
-        data: bytes = await asyncio.to_thread(self._renderer.render, req)
+        from core.utils.run_in_thread import to_thread
+        data: bytes = await to_thread(self._renderer.render, req)
 
         # 3) Upload to blob
         bucket = Buckets.VIDEOS.value

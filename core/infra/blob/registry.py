@@ -15,7 +15,7 @@ def register_blob(name: str) -> Callable[[Type[AsyncBlobStorage]], Type[AsyncBlo
 
 def get_blob() -> AsyncBlobStorage:
     cfg = get_settings().storage
-    name = cfg.backend.strip().lower()
+    name = cfg.driver.strip().lower()
     if name not in _REG:
         raise ValueError(f"Blob storage {name} not found")
     if name not in _SINGLETON:

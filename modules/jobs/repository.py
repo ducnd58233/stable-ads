@@ -6,7 +6,7 @@ class JobRepository:
     async def create(self, s: AsyncSession, job: Job) -> Job:
         s.add(job)
         await s.flush()
-        await s.refresh(job)
+        s.expunge(job)
         return job
 
     async def get(self, s: AsyncSession, job_id: str) -> Job | None:

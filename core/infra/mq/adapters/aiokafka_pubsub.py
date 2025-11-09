@@ -2,16 +2,20 @@ import asyncio
 from ..bus.interfaces import AsyncPublisher, AsyncSubscriber, Envelope
 from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
 from core.settings.config import get_settings
-from ..registry import register_publisher, register_subscriber
+from ..bus.registry import register_publisher, register_subscriber
 
 @register_publisher("kafka")
 class KafkaAsyncPublisher(AsyncPublisher):
     def __init__(self):
         self._producer: AIOKafkaProducer | None = None
-        self._broker = get_settings().mq.broker
+        self._brokers = get_settings().mq.bootstrap
 
     async def start(self):
-        self._producer = AIOKafkaProducer(bootstrap_servers=self._broker)
+        self._producer = AIOKafkaProducer(
+            bootstrap_servers=self._brokers,
+            acks=1,
+            request_timeout_ms=5000,
+        )
         await self._producer.start()
     
     async def stop(self):
@@ -30,7 +34,7 @@ class KafkaAsyncSubscriber(AsyncSubscriber):
     def __init__(self, group_id: str):
         s = get_settings().mq
         self._consumer = AIOKafkaConsumer(
-            bootstrap_servers=s.broker,
+            bootstrap_servers=s.bootstrap,
             group_id=group_id,
             enable_auto_commit=False,
             auto_offset_reset="earliest",
@@ -39,6 +43,7 @@ class KafkaAsyncSubscriber(AsyncSubscriber):
     async def start(self, topics: list[str]) -> None:
         assert self._consumer is not None
         await self._consumer.start()
+        self._consumer.subscribe(topics)
     
     async def stop(self) -> None:
         if self._consumer:

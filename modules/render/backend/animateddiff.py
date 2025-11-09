@@ -53,7 +53,7 @@ class AnimateDiffBackend(VideoBackend):
         return self._pipe
 
     def _render_beat(self, title: str, style: str, beat: BeatSpec, fps: int):
-        device_obj = torch.device(self._device) if self._device == "cuda" else torch.device("cpu")
+        device_obj = torch.device(self._device)
         g = torch.Generator(device_obj).manual_seed(self._cfg.seed)
         prompt = f"{title}, {style}, {beat.scene}" + (f", {beat.broll_hint}" if beat.broll_hint else "")
         desired_frames = int(beat.seconds * fps)

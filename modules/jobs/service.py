@@ -10,7 +10,7 @@ class JobService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
         self._repo = JobRepository()
-        self._topic = Topics.RENDER_REQUESTS
+        self._topic = Topics.RENDER_REQUESTS.value
 
     async def create(self, req: CreateJobRequest) -> Job:
         job = Job(
@@ -24,8 +24,10 @@ class JobService:
         return job
 
     async def publish(self, job: Job, publisher: AsyncPublisher, marshaler: Marshaler) -> None:
+        job_id = job.id
+        job_params = job.params
         env: Envelope = marshaler.dumps(
-            {"job_id": job.id, "prompt": job.params["prompt"], "style": job.params.get("style"), "duration_sec": job.params.get("duration_sec")},
+            {"job_id": job_id, "prompt": job_params["prompt"], "style": job_params.get("style"), "duration_sec": job_params.get("duration_sec")},
             topic=self._topic,
         )
         await publisher.publish(env)

@@ -4,8 +4,7 @@ from contextlib import asynccontextmanager
 from core.infra.db.async_db import AsyncDB
 from core.infra.db.model import Base
 from core.infra.blob.registry import get_blob
-from core.infra.mq import create_subscriber, create_marshaler, AsyncSubscriber
-from core.infra.mq.bus.topics import Topics
+from core.infra.mq import create_subscriber, create_marshaler, AsyncSubscriber, mw_retry_dlq, Topics
 from core.infra.container import Infra
 from core.settings.config import get_settings
 from modules.jobs.handler import JobsHandler
@@ -40,7 +39,7 @@ async def lifespan(app: FastAPI):
 
     rt.handler = JobsHandler(app.state.infra)
     rt.sub = create_subscriber(s.mq.driver, group_id=s.mq.group_renderer)
-    await rt.sub.start([Topics.RENDER_REQUESTS])
+    await rt.sub.start([Topics.RENDER_REQUESTS.value, Topics.RENDER_RESULTS.value])
 
     async def _loop() -> None:
         try:
@@ -52,8 +51,9 @@ async def lifespan(app: FastAPI):
                     payload = marshaler.loads(env)
                     await rt.handler.handle(payload)  # graph.ainvoke inside
                     await rt.sub.commit(env)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Error handling message: {e}")
+                    await mw_retry_dlq(rt.infra.publisher, Topics.RENDER_DLQ.value)
         except asyncio.CancelledError:
             pass
 

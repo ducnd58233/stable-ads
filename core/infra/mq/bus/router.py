@@ -48,7 +48,6 @@ class AsyncRouter:
             await self._sub.stop()
 
 def mw_retry_dlq(pub: AsyncPublisher, dlq_topic: str, max_attempts: int=3):
-    async def _publish(envelope: Envelope): await pub.publish(envelope)
     def _mw(next_fn):
         async def _inner(env: Envelope):
             attempt = int(env.headers.get("x-attempt","1"))
@@ -58,8 +57,8 @@ def mw_retry_dlq(pub: AsyncPublisher, dlq_topic: str, max_attempts: int=3):
                 if attempt >= max_attempts:
                     env.headers = dict(env.headers); env.headers["x-error"]=str(e)
                     env.topic = dlq_topic
-                    await _publish(env); return
+                    await pub.publish(env); return
                 env.headers = dict(env.headers); env.headers["x-attempt"]=str(attempt+1)
-                await _publish(env)
+                await pub.publish(env)
         return _inner
     return _mw

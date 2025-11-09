@@ -8,7 +8,7 @@ class Envelope:
     key: bytes | None
     payload: bytes
     headers: Mapping[str, str]
-    meta: Any | None
+    meta: Any | None = None
 
 class AsyncPublisher(Protocol):
     async def start(self) -> None: ...

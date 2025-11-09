@@ -1,16 +1,5 @@
-from .registry import create_publisher, create_subscriber, create_marshaler
-from .bus.topics import Topics
-from .bus.interfaces import Marshaler, AsyncPublisher, AsyncSubscriber, Envelope
-from .bus.router import AsyncRouter
+from . import adapters  # Import to register kafka publisher/subscriber
+from . import bus  # Import bus module to access its __all__
+from .bus import *  # Re-export all from bus module
 
-__all__ = [
-    "Envelope",
-    "create_publisher", 
-    "create_subscriber",
-    "create_marshaler",
-    "Topics",
-    "Marshaler",
-    "AsyncPublisher",
-    "AsyncSubscriber", 
-    "AsyncRouter",
-]
+__all__ = bus.__all__

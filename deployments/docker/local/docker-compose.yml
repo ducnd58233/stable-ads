@@ -1,15 +1,34 @@
 name: stable-ads
 
+x-kafka-common-env: &kafka-common-env
+  # KRaft roles
+  KAFKA_PROCESS_ROLES: "broker,controller"
+  # Node id differs per broker
+  # KAFKA_NODE_ID is set per service below
+  # Required cluster id (same across brokers)
+  CLUSTER_ID: "${MQ_CLUSTER_ID}"
+  KAFKA_CLUSTER_ID: "${MQ_CLUSTER_ID}"
+
+  # Listeners mapping
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
+  KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+  KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+
+  # Replication (for 3-node dev)
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "2"
+
 services:
   postgres:
     image: postgres:17
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-text2video}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_DB:-stable-ads}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -18,11 +37,11 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:-minioadmin}
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${STORAGE_API_PORT:-9000}:9000"
+      - "${STORAGE_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio:/data
     healthcheck:
@@ -43,27 +62,70 @@ services:
       exit 0;
       "
 
-  # Kafka in KRaft mode (no ZooKeeper)
-  kafka:
-    image: bitnami/kafka:3.7
-    container_name: t2v_kafka
-    restart: unless-stopped
+  kafka-1:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka-1
+    container_name: kafka-1
     ports:
-      - "${KAFKA_BROKER_PORT:-9092}:9092"
+      - "19092:19092"    # external client port
     environment:
-      KAFKA_ENABLE_KRAFT: "yes"
-      KAFKA_KRAFT_CLUSTER_ID: ${KAFKA_CLUSTER_ID:-7qCeYb8dQ9iYg1Th0lE6RQ}
-      KAFKA_CFG_PROCESS_ROLES: controller,broker
-      KAFKA_CFG_NODE_ID: 1
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_ADVERTISED_HOSTNAME:-localhost}:9092
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_CFG_NUM_PARTITIONS: ${KAFKA_DEFAULT_PARTITIONS:-3}
-      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: ${KAFKA_DEFAULT_REPLICATION_FACTOR:-1}
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: "1"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka-1:9092,CONTROLLER://kafka-1:9093,EXTERNAL://0.0.0.0:19092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-1:9092,EXTERNAL://localhost:19092"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
     volumes:
-      - kafkadata:/bitnami/kafka
+      - kafka-1-data:/var/lib/kafka/data
+
+  kafka-2:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka-2
+    container_name: kafka-2
+    ports:
+      - "29092:29092"
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: "2"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka-2:9092,CONTROLLER://kafka-2:9093,EXTERNAL://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-2:9092,EXTERNAL://localhost:29092"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+
+  kafka-3:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka-3
+    container_name: kafka-3
+    ports:
+      - "39092:39092"
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: "3"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka-3:9092,CONTROLLER://kafka-3:9093,EXTERNAL://0.0.0.0:39092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-3:9092,EXTERNAL://localhost:39092"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+
+  createtopics:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for Kafka to be ready...';
+      sleep 10;
+      kafka-topics --bootstrap-server kafka-1:9092 --create --if-not-exists --topic render-requests --partitions 3 --replication-factor 3;
+      kafka-topics --bootstrap-server kafka-1:9092 --create --if-not-exists --topic render-results --partitions 3 --replication-factor 3;
+      kafka-topics --bootstrap-server kafka-1:9092 --create --if-not-exists --topic render-dlq --partitions 3 --replication-factor 3;
+      echo 'Topics created successfully';
+      exit 0;
+      "
 
   ollama:
     image: ollama/ollama:latest
@@ -75,4 +137,6 @@ volumes:
   pgdata:
   minio:
   ollama:
-  kafkadata:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:

@@ -1,7 +1,9 @@
+import json
 import os
 from pathlib import Path
+from typing import Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 from langchain_core.globals import set_debug, set_verbose
 from functools import lru_cache
 
@@ -35,6 +37,14 @@ class DiffuserSettings(BaseModel):
     ad_steps: int | None = None
     ad_frames: int | None = None
     ad_guidance: float | None = None
+
+    @field_validator('device')
+    @classmethod
+    def normalize_device(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ('cpu', 'cuda', 'mps'):
+            raise ValueError(f"Device must be 'cpu', 'cuda', or 'mps', got: {v}")
+        return v
 
 class DBSettings(BaseModel):
     driver: str = "postgresql"  # postgresql, mysql, sqlite, etc.
@@ -80,24 +90,20 @@ class StorageSettings(BaseModel):
             raise ValueError(f"Unsupported storage driver: {self.driver}")
 
 class MQSettings(BaseModel):
-    driver: str = "kafka"  # kafka, rabbitmq, redis, etc.
-    broker: str = "localhost:9092"  # For Kafka: broker, for RabbitMQ: amqp://..., etc.
+    driver: str = Field(default="kafka", description="kafka | rabbitmq | redis | nats")
+    # For clustered drivers (kafka / nats):
+    brokers: str
+    # For single-URL drivers (rabbitmq / redis / nats):
+    url: str | None = None
     group_renderer: str = "renderer-workers"
     default_partitions: int = 3
     default_replication_factor: int = 1
-    
+
     @computed_field
     @property
-    def url(self) -> str:
-        """Generate message queue connection URL."""
-        if self.driver == "kafka":
-            return f"kafka://{self.broker}"
-        elif self.driver == "rabbitmq":
-            return self.broker if self.broker.startswith("amqp://") else f"amqp://{self.broker}"
-        elif self.driver == "redis":
-            return self.broker if self.broker.startswith("redis://") else f"redis://{self.broker}"
-        else:
-            raise ValueError(f"Unsupported MQ driver: {self.driver}")
+    def bootstrap(self) -> str:
+        return self.brokers.split(",")
+
 
 class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)

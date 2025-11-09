@@ -1,6 +1,6 @@
 from typing import Callable, Type
 
-from .bus.interfaces import AsyncPublisher, AsyncSubscriber, Marshaler
+from .interfaces import AsyncPublisher, AsyncSubscriber, Marshaler
 
 _PUB_REG: dict[str, Type[AsyncPublisher]] = {}
 _SUB_REG: dict[str, Type[AsyncSubscriber]] = {}

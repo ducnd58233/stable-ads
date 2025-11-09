@@ -62,7 +62,7 @@ class SVDBackend(VideoBackend):
         return self._svd
 
     def _keyframe(self, s: str, style: str, beat: BeatSpec) -> Image.Image:
-        device_obj = torch.device(self._device) if self._device == "cuda" else torch.device("cpu")
+        device_obj = torch.device(self._device)
         g = torch.Generator(device_obj).manual_seed(self._cfg.seed)
         prompt = f"{s}, {style}, {beat.scene}"
         return self._text_to_image_pipe()(
@@ -78,7 +78,7 @@ class SVDBackend(VideoBackend):
         SVD returns a clip of N frames based on parameters — we approximate duration by
         repeating or trimming to exactly frames_target to honor beat.seconds × fps.
         """
-        device_obj = torch.device(self._device) if self._device == "cuda" else torch.device("cpu")
+        device_obj = torch.device(self._device)
         g = torch.Generator(device_obj).manual_seed(self._cfg.seed)
         res = self._svd_pipe()(
             keyframe,

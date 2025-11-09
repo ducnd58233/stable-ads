@@ -53,7 +53,8 @@ def get_backend() -> VideoBackend:
     name = cfg.backend.strip().lower()
     if name not in _REGISTRY:
         raise ValueError(f"Video backend {name} not found")
-    if name not in _SINGLETON:
-        _SINGLETON[name] = _REGISTRY[name](cfg)
-    return _SINGLETON[name]
+    cache_key = f"{name}:{cfg.device}"
+    if cache_key not in _SINGLETON:
+        _SINGLETON[cache_key] = _REGISTRY[name](cfg)
+    return _SINGLETON[cache_key]
     
