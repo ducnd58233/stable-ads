@@ -53,17 +53,49 @@ This will start the following services:
 
 ## Commands
 
-### Run API Server
+### Start All Services
 
 ```bash
+docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -d
+```
+
+### Start Individual Service Groups
+
+```bash
+# Infrastructure only
+docker compose -f deployments/docker/local/docker-compose.infra.yml --env-file .env up -d
+# Ads services
+docker compose -f deployments/docker/local/docker-compose.ads.yml --env-file .env up -d
+```
+
+### Run Applications Locally
+
+```bash
+# API Server
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
 
-### Run Worker Service
-
-```bash
+# Worker Service
 uvicorn apps.worker.main:app --host 0.0.0.0 --port 8001 --reload
+
+# Data Ingestion Service
+uvicorn apps.data-ingestion.main:app --host 0.0.0.0 --port 8002 --reload
+
+# Prediction API
+uvicorn apps.prediction-api.main:app --host 0.0.0.0 --port 8003 --reload
 ```
+
+### Access Services
+
+- **API Server**: http://localhost:8000
+- **Worker Service**: http://localhost:8001
+- **Data Ingestion**: http://localhost:8002
+- **Prediction API**: http://localhost:8003
+- **Airflow UI**: http://localhost:8080 (airflow/airflow)
+- **MLflow UI**: http://localhost:5000
+- **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
+- **Spark Master**: http://localhost:8081
+- **SigNoz Observability**: http://localhost:3301
+
 
 ## Folder Structure
 
