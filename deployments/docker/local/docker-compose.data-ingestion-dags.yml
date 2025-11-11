@@ -11,6 +11,7 @@ x-airflow-common-env: &airflow-common-env
   AIRFLOW__CORE__EXECUTOR: LocalExecutor
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_DB:-stable-ads}
   AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
   PYTHONPATH: /opt/airflow/project
 
 x-airflow-common-volumes: &airflow-common-volumes

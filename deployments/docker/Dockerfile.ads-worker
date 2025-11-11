@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock /tmp/
 WORKDIR /tmp
-RUN uv pip install --system --no-cache -r pyproject.toml
+RUN uv pip install --system --no-cache --group core --group worker
 
 # Stage 4: Copy application code
 FROM python-deps AS app

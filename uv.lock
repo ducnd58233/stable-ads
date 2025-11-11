@@ -3251,14 +3251,30 @@ wheels = [
 name = "stable-ads"
 version = "0.1.0"
 source = { virtual = "." }
-dependencies = [
+
+[package.dev-dependencies]
+core = [
     { name = "aiokafka" },
+    { name = "asyncpg" },
+    { name = "fastapi", extra = ["standard"] },
+    { name = "minio" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy" },
+    { name = "uvicorn" },
+]
+data-ingestion = [
     { name = "apache-airflow", extra = ["postgres"] },
     { name = "apache-airflow-providers-common-sql" },
-    { name = "asyncpg" },
+    { name = "pandas" },
+    { name = "pendulum" },
+    { name = "psycopg2-binary" },
+]
+dev = [
+    { name = "ipykernel" },
+]
+worker = [
     { name = "bitsandbytes" },
     { name = "diffusers", extra = ["torch"] },
-    { name = "fastapi", extra = ["standard"] },
     { name = "ftfy" },
     { name = "hf-xet" },
     { name = "imageio" },
@@ -3266,30 +3282,34 @@ dependencies = [
     { name = "langchain" },
     { name = "langchain-ollama" },
     { name = "langchain-openai" },
-    { name = "minio" },
     { name = "opencv-python" },
-    { name = "pandas" },
-    { name = "pydantic-settings" },
-    { name = "sqlalchemy" },
     { name = "torch" },
     { name = "transformers" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ipykernel" },
 ]
 
 [package.metadata]
-requires-dist = [
+
+[package.metadata.requires-dev]
+core = [
     { name = "aiokafka", specifier = ">=0.12.0" },
+    { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.121.0" },
+    { name = "minio", specifier = ">=7.2.18" },
+    { name = "pydantic-settings", specifier = ">=2.11.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.44" },
+    { name = "uvicorn", specifier = ">=0.38.0" },
+]
+data-ingestion = [
     { name = "apache-airflow", extras = ["postgres"], specifier = ">=3.1.0" },
     { name = "apache-airflow-providers-common-sql", specifier = ">=1.28.2" },
-    { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "pandas", specifier = ">=2.3.3" },
+    { name = "pendulum", specifier = ">=3.0.0" },
+    { name = "psycopg2-binary", specifier = ">=2.9.9" },
+]
+dev = [{ name = "ipykernel", specifier = ">=7.1.0" }]
+worker = [
     { name = "bitsandbytes", specifier = ">=0.48.2" },
     { name = "diffusers", extras = ["torch"], specifier = ">=0.35.2" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.121.0" },
     { name = "ftfy", specifier = ">=6.3.1" },
     { name = "hf-xet", specifier = ">=1.2.0" },
     { name = "imageio", specifier = ">=2.37.2" },
@@ -3297,18 +3317,10 @@ requires-dist = [
     { name = "langchain", specifier = ">=1.0.4" },
     { name = "langchain-ollama", specifier = ">=1.0.0" },
     { name = "langchain-openai", specifier = ">=1.0.2" },
-    { name = "minio", specifier = ">=7.2.18" },
     { name = "opencv-python", specifier = ">=4.12.0.88" },
-    { name = "pandas", specifier = ">=2.3.3" },
-    { name = "pydantic-settings", specifier = ">=2.11.0" },
-    { name = "sqlalchemy", specifier = ">=2.0.44" },
     { name = "torch", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "transformers", specifier = ">=4.57.1" },
-    { name = "uvicorn", specifier = ">=0.38.0" },
 ]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ipykernel", specifier = ">=7.1.0" }]
 
 [[package]]
 name = "stack-data"

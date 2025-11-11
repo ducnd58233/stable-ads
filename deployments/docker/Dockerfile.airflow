@@ -14,9 +14,11 @@ USER airflow
 # First install setuptools to ensure pkg_resources is available
 RUN pip install --no-cache-dir --upgrade setuptools
 
-# Copy and install Python packages from requirements file
-COPY deployments/docker/requirements-airflow.txt /tmp/requirements-airflow.txt
-RUN pip install --no-cache-dir -r /tmp/requirements-airflow.txt
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock /tmp/
+WORKDIR /tmp
+RUN uv pip install --no-cache --group airflow-core --group data-ingestion
 
 WORKDIR /opt/airflow/project
 COPY core/ ./core/
