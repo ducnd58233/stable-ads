@@ -5,7 +5,7 @@ generated/
 *.pdf
 *.json
 runs/
-
+logs/
 
 ### Database ###
 *.accdb

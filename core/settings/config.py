@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import BaseModel, Field, computed_field, field_validator
-from langchain_core.globals import set_debug, set_verbose
 from functools import lru_cache
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -120,8 +119,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-set_verbose(True)
-set_debug(True)
+try:
+    from langchain_core.globals import set_debug, set_verbose
+    set_verbose(True)
+    set_debug(True)
+except ImportError:
+    pass
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

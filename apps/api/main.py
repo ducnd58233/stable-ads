@@ -7,6 +7,7 @@ from core.infra.mq import create_publisher, create_marshaler
 from core.infra.container import Infra
 from core.settings.config import get_settings
 from modules.jobs.api import router as jobs_router
+from modules.data_ingestion.api import router as data_ingestion_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,7 +42,9 @@ async def lifespan(app: FastAPI):
         await db.stop()
 
 app = FastAPI(title="stable-ads-api", lifespan=lifespan)
+
 app.include_router(jobs_router)
+app.include_router(data_ingestion_router)
 
 @app.get("/healthz")
 async def healthz() -> dict[str, bool]:

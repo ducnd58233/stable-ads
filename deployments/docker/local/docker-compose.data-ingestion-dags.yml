@@ -1,0 +1,76 @@
+name: stable-ads-data-ingestion-dags
+
+x-airflow-common: &airflow-common
+  build:
+    context: ../../..
+    dockerfile: deployments/docker/Dockerfile.airflow
+  env_file:
+    - ../../../.env
+
+x-airflow-common-env: &airflow-common-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_DB:-stable-ads}
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  PYTHONPATH: /opt/airflow/project
+
+x-airflow-common-volumes: &airflow-common-volumes
+  - ../../../:/opt/airflow/project
+  - ../../../apps/dags:/opt/airflow/dags
+  - ./logs:/opt/airflow/logs
+  - ./plugins:/opt/airflow/plugins
+
+x-airflow-runtime-env: &airflow-runtime-env
+  <<: *airflow-common-env
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__API__AUTH_MANAGER: airflow.auth.managers.simple.SimpleAuthManager
+
+services:
+  airflow-init:
+    <<: *airflow-common
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__API__AUTH_MANAGER: airflow.auth.managers.simple.SimpleAuthManager
+    volumes: *airflow-common-volumes
+    command: airflow db migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  airflow-api-server:
+    <<: *airflow-common
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-runtime-env
+    volumes: *airflow-common-volumes
+    ports:
+      - "${AIRFLOW_UI_PORT:-8080}:8080"
+    command: api-server
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_started
+    environment:
+      <<: *airflow-runtime-env
+    volumes: *airflow-common-volumes
+    command: scheduler
+    restart: unless-stopped
