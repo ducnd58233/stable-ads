@@ -69,23 +69,19 @@ class FileParser(ABC):
         # Trim whitespace from string columns
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
-            # Replace empty strings with NaN
             df[col] = df[col].replace('', pd.NA)
         
         # Standardize date columns (common patterns)
         date_patterns = ['date', 'time', 'timestamp', 'created', 'updated']
         for col in df.columns:
             if any(pattern in col.lower() for pattern in date_patterns):
-                df[col] = pd.to_datetime(df[col], errors='coerce', infer_datetime_format=True)
+                df[col] = pd.to_datetime(df[col], errors='coerce')
         
-        # Remove rows where all required fields are null
         if fields:
             df = df.dropna(subset=fields, how='all')
         
-        # Type inference for numeric columns
         for col in df.select_dtypes(include=['object']).columns:
             if col not in [c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]:
-                # Try to convert to numeric
                 numeric = pd.to_numeric(df[col], errors='coerce')
                 if not numeric.isna().all():
                     df[col] = numeric
