@@ -28,12 +28,6 @@ conda activate stable-ads### Configure Environment Variables
 
 cp .env.example .env
 
-# windows
-copy .env.example .envEdit the `.env` file with your configuration settings. For Airflow, you may want to set:
-- `AIRFLOW_USERNAME` (default: airflow)
-- `AIRFLOW_PASSWORD` (default: airflow)
-- `AIRFLOW_FERNET_KEY` (generate with: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
-
 ### Start Infrastructure Services
 h
 docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -dThis will start the following services:
