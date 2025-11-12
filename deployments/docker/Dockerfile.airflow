@@ -1,0 +1,27 @@
+FROM apache/airflow:3.1.1-python3.13
+
+USER root
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+USER airflow
+
+# First install setuptools to ensure pkg_resources is available
+RUN pip install --no-cache-dir --upgrade setuptools
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock /tmp/
+WORKDIR /tmp
+RUN uv pip install --no-cache --group airflow-core --group data-ingestion
+
+WORKDIR /opt/airflow/project
+COPY core/ ./core/
+COPY modules/ ./modules/
+
+ENV PYTHONPATH=/opt/airflow/project

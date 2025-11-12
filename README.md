@@ -5,6 +5,7 @@
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
 - [Commands](#commands)
+- [Access Services & Dashboards](#access-services--dashboards)
 - [Folder Structure](#folder-structure)
 
 ## Prerequisites
@@ -12,7 +13,7 @@
 Before setting up the project, ensure you have the following installed:
 
 - **Conda** (Miniconda or Anaconda) - For Python environment management
-- **Docker** and **Docker Compose** - For running infrastructure services (PostgreSQL, MinIO, Kafka, Ollama)
+- **Docker** and **Docker Compose** - For running infrastructure services (PostgreSQL, MinIO, Kafka, Ollama, Airflow)
 - **Python 3.13** - Required Python version
 - **CUDA Toolkit** - For GPU acceleration (required for PyTorch with CUDA support)
 - **uv** - Python package manager (installed via conda environment)
@@ -21,130 +22,128 @@ Before setting up the project, ensure you have the following installed:
 
 ### Create Environment
 
-```bash
-conda env create -f environment.yml
-```
+conda env create -f environment.yml### Activate Environment
 
-### Activate Environment
+conda activate stable-ads### Configure Environment Variables
 
-```bash
-conda activate stable-ads
-```
-
-### Configure Environment Variables
-
-```bash
 cp .env.example .env
-```
-
-Edit the `.env` file with your configuration settings.
 
 ### Start Infrastructure Services
-
-```bash
-docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -d
-```
-
-This will start the following services:
+h
+docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -dThis will start the following services:
 - PostgreSQL (database)
 - MinIO (object storage)
 - Kafka cluster (3 nodes for message queue)
+- Kafka UI (dashboard for Kafka)
+- Airflow (webserver & scheduler)
 - Ollama (LLM service)
 
 ## Commands
 
-### Run API Server
+### Start All Services
+h
+docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -d### Start Individual Service Groups
 
-```bash
+# Infrastructure only (PostgreSQL, MinIO, Kafka, Kafka UI, Redis, Ollama)
+docker compose -f deployments/docker/local/docker-compose.infra.yml --env-file .env up -d
+
+# Ads services (API, Worker)
+docker compose -f deployments/docker/local/docker-compose.ads.yml --env-file .env up -d
+
+# Data Ingestion & Airflow (Airflow webserver, scheduler, DAGs)
+docker compose -f deployments/docker/local/docker-compose.data-ingestion-dags.yml --env-file .env up -d### Run Applications Locally
+
+# API Server
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
 
-### Run Worker Service
-
-```bash
+# Worker Service
 uvicorn apps.worker.main:app --host 0.0.0.0 --port 8001 --reload
-```
+## Access Services & Dashboards
+
+### Application Services
+
+- **API Server**: http://localhost:8000
+  - API Docs: http://localhost:8000/docs
+  - Health Check: http://localhost:8000/healthz
+- **Worker Service**: http://localhost:8001
+  - Health Check: http://localhost:8001/healthz
+
+### Infrastructure Dashboards
+
+- **MinIO Console**: http://localhost:9001
+  - Default credentials: `minioadmin` / `minioadmin`
+  - Access Key: Set via `STORAGE_ACCESS_KEY` in `.env`
+  - Secret Key: Set via `STORAGE_SECRET_KEY` in `.env`
+
+- **Kafka UI**: http://localhost:8082
+  - View topics, messages, consumer groups, and cluster information
+  - No authentication required (development only)
+
+- **Airflow UI**: http://localhost:8080
+  - Default credentials: `airflow` / `airflow` (or set via `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` in `.env`)
+  - View and manage DAGs, monitor task execution, view logs
+
+- **PostgreSQL**: `localhost:5432`
+  - Database: `stable-ads` (or set via `DB_DB` in `.env`)
+  - User: `postgres` (or set via `DB_USER` in `.env`)
+  - Password: Set via `DB_PASSWORD` in `.env`
+
 
 ## Folder Structure
 
 ```
 stable-ads/
-├── apps/                    # Application entry points
-│   ├── api/                 # API server application
-│   │   └── main.py          # FastAPI application entry point
-│   └── worker/              # Worker service application
-│       └── main.py          # Worker service entry point
-│
-├── core/                    # Core infrastructure and utilities
-│   ├── infra/               # Infrastructure components
-│   │   ├── blob/            # Object storage abstraction (MinIO)
-│   │   │   ├── buckets.py   # Bucket management
-│   │   │   ├── interface.py # Storage interface
-│   │   │   ├── minio_client.py  # MinIO client implementation
-│   │   │   └── registry.py  # Service registry
-│   │   ├── container.py     # Dependency injection container
-│   │   ├── db/              # Database components
-│   │   │   ├── async_db.py  # Async database connection
-│   │   │   └── model.py     # Database models
-│   │   └── mq/              # Message queue components
-│   │       ├── adapters/    # Message queue adapters
-│   │       │   └── aiokafka_pubsub.py  # Kafka pub/sub adapter
-│   │       └── bus/         # Message bus
-│   │           ├── interfaces.py   # Bus interfaces
-│   │           ├── marshalers.py   # Message serialization
-│   │           ├── router.py       # Message routing
-│   │           └── topics.py       # Topic definitions
-│   ├── settings/            # Configuration management
-│   │   └── config.py        # Application settings
-│   └── utils/               # Utility functions
-│       └── run_in_thread.py # Thread execution utilities
-│
-├── deployments/             # Deployment configurations
-│   └── docker/
-│       └── local/
-│           └── docker-compose.yml  # Local development Docker Compose
-│
-├── generated/               # Generated output files
-│   └── videos/              # Generated video files
-│
-├── modules/                 # Business logic modules
-│   ├── jobs/               # Job management module
-│   │   ├── api.py          # Job API endpoints
-│   │   ├── domain.py       # Job domain logic
-│   │   ├── dto.py          # Data transfer objects
-│   │   ├── handler.py      # Job handlers
-│   │   ├── model.py        # Job models
-│   │   ├── repository.py   # Data access layer
-│   │   └── service.py      # Business services
-│   ├── llm/                # Large Language Model integration
-│   │   ├── provider.py     # LLM provider abstraction
-│   │   └── tools/          # LLM tools
-│   │       └── common.py   # Common LLM utilities
-│   ├── orchestrator/       # Workflow orchestration
-│   │   ├── domain.py       # Orchestration domain logic
-│   │   ├── dto.py          # Orchestration DTOs
-│   │   ├── graph.py        # Workflow graph definition
-│   │   └── mapper.py       # Data mapping utilities
-│   └── render/             # Video rendering module
-│       ├── backend/        # Rendering backends
-│       │   ├── animateddiff.py  # AnimateDiff backend
-│       │   ├── base.py     # Base renderer interface
-│       │   ├── dto.py      # Render DTOs
-│       │   └── svd.py      # Stable Video Diffusion backend
-│       └── video_renderer.py  # Video renderer service
-│
-├── notebooks/              # Jupyter notebooks
-│   └── test-svd.ipynb      # SVD testing notebook
-│
-├── runs/                   # Runtime data and models
-│   └── models/             # Downloaded ML models
-│       └── video-render/   # Video rendering models
-│           ├── animateddiff/    # AnimateDiff models
-│           ├── svd/            # Stable Video Diffusion models
-│           └── text-to-image/  # Text-to-image models
-│
-├── environment.yml         # Conda environment definition
-├── pyproject.toml          # Python project configuration
-├── uv.lock                 # Dependency lock file
+|
+|- apps/                     # Application entry points
+|  |
+|  |- api/                   # API server application
+|  |
+|  |- dags/                  # Airflow DAGs
+|  |
+|  |- worker/                # Worker service application
+|
+|- core/                     # Core infrastructure and utilities
+|  |
+|  |- infra/                 # Infrastructure components
+|  |  |
+|  |  |- blob/               # Object storage abstraction (MinIO)
+|  |  |
+|  |  |- db/                 # Database components
+|  |  |
+|  |  |- mq/                 # Message queue components
+|  |     |
+|  |     |- adapters/        # Message queue adapters
+|  |     |
+|  |     |- bus/             # Message bus
+|  |
+|  |- settings/              # Configuration management
+|  |
+|  |- utils/                 # Utility functions
+|
+|- deployments/              # Deployment configurations
+|  |
+|  |- docker/                # Docker configurations
+|     |
+|     |- local/              # Local development Docker Compose files
+|
+|- modules/                  # Business logic modules
+|  |
+|  |- data_ingestion/        # Data ingestion module
+|  |  |
+|  |  |- parsers/            # File parsers (CSV, etc.)
+|  |
+|  |- jobs/                  # Job management module
+|  |
+|  |- llm/                   # Large Language Model integration
+|  |  |
+|  |  |- tools/               # LLM tools
+|  |
+|  |- orchestrator/          # Workflow orchestration
+|  |
+|  |- render/                # Video rendering module
+|     |
+|     |- backend/            # Rendering backends
+|
+|- notebooks/                # Jupyter notebooks
 
 ```

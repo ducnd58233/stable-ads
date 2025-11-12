@@ -1,11 +1,10 @@
-from asyncio import to_thread
+from core.utils.run_in_thread import to_thread
 import io
 from core.infra.blob.buckets import Buckets
 from core.infra.blob.interface import AsyncBlobStorage
 from core.infra.blob.registry import register_blob
 from core.settings.config import StorageSettings
 from minio import Minio
-
 
 @register_blob("minio")
 class MinioClient(AsyncBlobStorage):
@@ -32,8 +31,16 @@ class MinioClient(AsyncBlobStorage):
                 length=len(data),
                 content_type=content_type,
             )
-        await to_thread(fn=_u)
+        await to_thread(_u)
 
+    async def get_object(self, bucket: Buckets, key: str) -> bytes:
+        def _g() -> bytes:
+            response = self._cli.get_object(bucket.value, key)
+            data = response.read()
+            response.close()
+            response.release_conn()
+            return data
+        return await to_thread(_g)
 
     async def get_presigned_url(self, bucket: Buckets, key: str, expires_seconds: int=3600) -> str:
         def _p() -> str:
@@ -42,4 +49,4 @@ class MinioClient(AsyncBlobStorage):
                 object_name=key,
                 expires=expires_seconds,
             )
-        return await to_thread(fn=_p)
+        return await to_thread(_p)

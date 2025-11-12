@@ -1,7 +1,5 @@
 from abc import ABC, abstractmethod
-
 from core.infra.blob.buckets import Buckets
-
 
 class AsyncBlobStorage(ABC):
     @abstractmethod
@@ -10,5 +8,7 @@ class AsyncBlobStorage(ABC):
     async def stop(self) -> None: ...
     @abstractmethod
     async def upload(self, bucket: Buckets, key: str, data: bytes, content_type: str="application/octet-stream") -> None: ...
+    @abstractmethod
+    async def get_object(self, bucket: Buckets, key: str) -> bytes: ...
     @abstractmethod
     async def get_presigned_url(self, bucket: Buckets, key: str, expires_seconds: int=3600) -> str: ...
