@@ -41,23 +41,37 @@ docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up
 ## Commands
 
 ### Start All Services
-h
-docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -d### Start Individual Service Groups
+```
+docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -d
+```
 
-# Infrastructure only (PostgreSQL, MinIO, Kafka, Kafka UI, Redis, Ollama)
+### Start Individual Service Groups
+
+- Infrastructure only (PostgreSQL, MinIO, Kafka, Kafka UI, Redis, Ollama)
+```
 docker compose -f deployments/docker/local/docker-compose.infra.yml --env-file .env up -d
+```
 
-# Ads services (API, Worker)
+- Ads services
+```
 docker compose -f deployments/docker/local/docker-compose.ads.yml --env-file .env up -d
+```
 
-# Data Ingestion & Airflow (Airflow webserver, scheduler, DAGs)
+- Data Ingestion & Airflow (Airflow webserver, scheduler, DAGs)
+```
 docker compose -f deployments/docker/local/docker-compose.data-ingestion-dags.yml --env-file .env up -d### Run Applications Locally
+```
 
-# API Server
+- API Server
+```
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-# Worker Service
+- Worker Service
+```
 uvicorn apps.worker.main:app --host 0.0.0.0 --port 8001 --reload
+```
+
 ## Access Services & Dashboards
 
 ### Application Services
