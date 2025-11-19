@@ -1,10 +1,10 @@
-from typing import Callable, Type
+from typing import Callable, Final, Type
 from core.infra.blob.interface import AsyncBlobStorage
 from core.settings.config import get_settings
 
 
-_REG: dict[str, Type[AsyncBlobStorage]] = {}
-_SINGLETON: dict[str, AsyncBlobStorage] = {}
+_REG: Final[dict[str, Type[AsyncBlobStorage]]] = {}
+_SINGLETON: Final[dict[str, AsyncBlobStorage]] = {}
 
 def register_blob(name: str) -> Callable[[Type[AsyncBlobStorage]], Type[AsyncBlobStorage]]:
     key = name.strip().lower()

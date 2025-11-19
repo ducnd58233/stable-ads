@@ -1,54 +1,38 @@
 from datetime import timedelta
-import json
 import logging
-import os
-import tempfile
 from typing import Any, Final
-
-import numpy as np
-import pandas as pd
 import pendulum
 from airflow import DAG
 from airflow.models import Variable
 from airflow.providers.standard.operators.python import PythonOperator
-from core.infra.blob.buckets import Buckets
-from core.infra.blob.registry import get_blob
 from core.infra.db.async_db import AsyncDB
+from core.infra.db.model import Base
 from core.utils.run_in_thread import run_async_from_sync
-from modules.data_ingestion.domain import IngestionStatus
-from modules.data_ingestion.parsers.registry import get_parser
-from sqlalchemy import text
+from modules.data_ingestion import DataIngestionService
+from modules.warehouse import WarehouseDataService
+from modules.feature_store import FeatureStoreService
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
 
 logger = logging.getLogger(__name__)
+
+for module_name in ['modules.warehouse', 'modules.feature_store', 'modules.ml', 'modules.data_ingestion']:
+    module_logger = logging.getLogger(module_name)
+    module_logger.setLevel(logging.INFO)
+    module_logger.propagate = True
 
 BATCH_SIZE = int(Variable.get("DATA_INGESTION_BATCH_SIZE", default_var=10))
 LARGE_FILE_THRESHOLD_MB = int(Variable.get("LARGE_FILE_THRESHOLD_MB", default_var=100))
 CHUNK_SIZE = int(Variable.get("DATA_INGESTION_CHUNK_SIZE", default_var=10000))
-
-WAREHOUSE_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS warehouse_data (
-    id BIGSERIAL PRIMARY KEY,
-    ingestion_id TEXT NOT NULL,
-    event_time TIMESTAMPTZ,
-    event_type TEXT,
-    product_id BIGINT,
-    category_id BIGINT,
-    category_code TEXT,
-    brand TEXT,
-    price DOUBLE PRECISION,
-    user_id BIGINT,
-    user_session TEXT,
-    inserted_at TIMESTAMPTZ DEFAULT NOW()
-);
-"""
-
-WAREHOUSE_INDEX_DDL = """
-CREATE INDEX IF NOT EXISTS idx_warehouse_data_ingestion_event
-ON warehouse_data (ingestion_id, event_time);
-"""
+FEATURE_LOOKBACK_DAYS = int(Variable.get("FEATURE_LOOKBACK_DAYS", default_var=30))
+LABEL_HORIZON_DAYS = int(Variable.get("LABEL_HORIZON_DAYS", default_var=7))
 
 default_args = {
-    "owner": "stable-ads-data-ingestion-team",
+    "owner": "stable-ads-data-team",
     "depends_on_past": False,
     "email_on_failure": True,
     "email_on_retry": False,
@@ -58,373 +42,235 @@ default_args = {
     "max_retry_delay": timedelta(hours=1),
 }
 
-
-def get_pending_ingestions(**context) -> list[dict[str, Any]]:
-    async def _get_pending() -> list[dict[str, Any]]:
+def init_db(**context) -> None:
+    async def _start():
         db = AsyncDB()
         await db.start()
         try:
             async with db.engine.begin() as conn:
-                result = await conn.execute(
-                    text(
-                        """
-                        SELECT id, file_type, fields, raw_bucket, raw_key, raw_bytes
-                        FROM data_ingestions
-                        WHERE status = :pending_status
-                        ORDER BY created_at ASC
-                        LIMIT :limit
-                        """
-                    ),
-                    {"limit": BATCH_SIZE, "pending_status": IngestionStatus.PENDING.value},
-                )
-                rows = result.fetchall()
-                ingestions = [
-                    {
-                        "id": row[0],
-                        "file_type": row[1],
-                        "fields": row[2],
-                        "raw_bucket": row[3],
-                        "raw_key": row[4],
-                        "raw_bytes": row[5],
-                    }
-                    for row in rows
-                ]
-            logger.info("Found %s pending ingestions", len(ingestions))
-            return ingestions
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables initialized successfully")
         finally:
             await db.stop()
-
-    ingestions: Final[list[dict[str, Any]]] = run_async_from_sync(_get_pending())
-    context["ti"].xcom_push(key="pending_ingestions", value=ingestions)
-    return ingestions
-
-
-def validate_and_transform_data(**context) -> dict[str, Any]:
-    """Validate fields, stream chunks into the warehouse, and capture summaries.
     
-    Returns a summary dict with success/failure counts. Raises RuntimeError
-    if any ingestion fails to ensure the Airflow task fails.
-    """
-    upload_results = context["ti"].xcom_pull(
-        key="pending_ingestions", task_ids="get_pending_ingestions"
-    ) or []
+    run_async_from_sync(_start())
 
-    async def _process_ingestions() -> dict[str, Any]:
-        """Process all pending ingestions and return summary with success/failure counts.
-        
-        Returns:
-            dict with keys:
-                - successful: list of successful ingestion summaries
-                - failed: list of failed ingestion details
-                - total: total number of ingestions processed
-                - success_count: number of successful ingestions
-                - failure_count: number of failed ingestions
-        """
+def ingest_data(**context) -> dict[str, Any]:
+    
+    async def _ingest():
         db = AsyncDB()
         await db.start()
-        blob = get_blob()
-        await blob.start()
-
-        successful_ingestions: list[dict[str, Any]] = []
-        failed_ingestions: list[dict[str, str]] = []
-
         try:
-            async with db.engine.begin() as conn:
-                await conn.execute(text(WAREHOUSE_TABLE_DDL))
-                await conn.execute(text(WAREHOUSE_INDEX_DDL))
-
-            async def _update_status(
-                ingestion_id: str,
-                status: IngestionStatus,
-                *,
-                fields: list[str] | None = None,
-                error_message: str | None = None,
-            ) -> None:
-                payload = {
-                    "id": ingestion_id,
-                    "status": status.value,
-                    "error": error_message,
-                    "fields": json.dumps(fields) if fields is not None else None,
-                }
-                async with db.engine.begin() as conn:
-                    if fields is not None:
-                        await conn.execute(
-                            text(
-                                """
-                                UPDATE data_ingestions
-                                SET status = :status,
-                                    fields = CAST(:fields AS JSONB),
-                                    error_message = :error
-                                WHERE id = :id
-                                """
-                            ),
-                            payload,
-                        )
-                    else:
-                        await conn.execute(
-                            text(
-                                """
-                                UPDATE data_ingestions
-                                SET status = :status,
-                                    error_message = :error
-                                WHERE id = :id
-                                """
-                            ),
-                            payload,
-                        )
-
-            async def _insert_chunk(chunk_df: pd.DataFrame, ingestion_id: str) -> int:
-                """Insert a chunk of transformed data into the warehouse.
-                
-                Handles invalid numeric values (NaN, inf, -inf) by converting them to None,
-                which becomes NULL in PostgreSQL.
-                """
-                if chunk_df.empty:
-                    return 0
-
-                chunk_df = chunk_df.copy()
-                chunk_df["ingestion_id"] = ingestion_id
-                
-                chunk_df = chunk_df.replace({
-                    np.nan: None,
-                    pd.NA: None,
-                    np.inf: None,
-                    -np.inf: None,
-                    float('inf'): None,
-                    float('-inf'): None,
-                })
-
-                records = chunk_df.to_dict("records")
-                if not records:
-                    return 0
-
-                columns = list(chunk_df.columns)
-                placeholders = ", ".join(f":{col}" for col in columns)
-                columns_str = ", ".join(columns)
-
-                async with db.engine.begin() as conn:
-                    await conn.execute(
-                        text(
-                            f"""
-                            INSERT INTO warehouse_data ({columns_str})
-                            VALUES ({placeholders})
-                            ON CONFLICT DO NOTHING
-                            """
-                        ),
-                        records,
-                    )
-                return len(records)
-
-            for ingestion in upload_results:
-                ingestion_id = ingestion["id"]
-                raw_key = ingestion["raw_key"]
-                file_type = ingestion["file_type"]
-                requested_fields = ingestion["fields"]
-                file_size = ingestion.get("raw_bytes", 0) or 0
-                rows_inserted = 0
-
-                try:
-                    await _update_status(ingestion_id, IngestionStatus.VALIDATING)
-
-                    file_data = await blob.get_object(Buckets.RAW_DATA, raw_key)
-
-                    temp_file_path = None
-                    try:
-                        temp_file = tempfile.NamedTemporaryFile(
-                            delete=False,
-                            suffix=f".{file_type}",
-                            prefix=f"ingestion-{ingestion_id}-",
-                        )
-                        temp_file.write(file_data)
-                        temp_file_path = temp_file.name
-                        temp_file.close()
-
-                        parser = get_parser(temp_file_path)
-                        file_headers = parser.get_headers(temp_file_path)
-
-                        if not file_headers:
-                            raise ValueError("File has no headers or is empty")
-
-                        if requested_fields:
-                            missing_fields = [f for f in requested_fields if f not in file_headers]
-                            if missing_fields:
-                                raise ValueError(
-                                    f"Missing fields in file: {', '.join(missing_fields)}"
-                                )
-                            fields_to_use = requested_fields
-                        else:
-                            fields_to_use = file_headers
-
-                        await _update_status(
-                            ingestion_id,
-                            IngestionStatus.UPLOADING,
-                            fields=fields_to_use,
-                            error_message=None,
-                        )
-
-                        large_file_threshold = LARGE_FILE_THRESHOLD_MB * 1024 * 1024
-
-                        if file_size > large_file_threshold:
-                            logger.info("Processing large file %s in chunks", ingestion_id)
-                            for chunk_df in parser.read_dataframe_chunks(
-                                temp_file_path,
-                                fields=fields_to_use,
-                                chunksize=CHUNK_SIZE,
-                            ):
-                                transformed_chunk = parser.transform_chunk(
-                                    chunk_df, fields_to_use
-                                )
-                                rows_inserted += await _insert_chunk(
-                                    transformed_chunk, ingestion_id
-                                )
-                        else:
-                            df = parser.read_dataframe(temp_file_path, fields=fields_to_use)
-                            transformed = parser.transform(df, fields_to_use)
-                            rows_inserted += await _insert_chunk(transformed, ingestion_id)
-
-                        logger.info(
-                            "Validation and load successful for %s. Rows inserted: %s",
-                            ingestion_id,
-                            rows_inserted,
-                        )
-
-                    finally:
-                        if temp_file_path and os.path.exists(temp_file_path):
-                            os.unlink(temp_file_path)
-
-                except Exception as exc:
-                    error_message = str(exc)
-                    logger.exception(
-                        "Validation/Transform failed for %s: %s", ingestion_id, error_message
-                    )
-                    await _update_status(
-                        ingestion_id,
-                        IngestionStatus.FAILED,
-                        error_message=f"Validation/Transform error: {error_message}",
-                    )
-                    failed_ingestions.append({
-                        "ingestion_id": ingestion_id,
-                        "error": error_message,
-                    })
-                    continue
-
-                await _update_status(ingestion_id, IngestionStatus.SUCCEEDED, error_message=None)
-                successful_ingestions.append({
-                    "ingestion_id": ingestion_id,
-                    "rows_inserted": rows_inserted,
-                })
-
-        finally:
-            await blob.stop()
-            await db.stop()
-
-        total_processed = len(upload_results)
-        success_count = len(successful_ingestions)
-        failure_count = len(failed_ingestions)
-
-        summary = {
-            "successful": successful_ingestions,
-            "failed": failed_ingestions,
-            "total": total_processed,
-            "success_count": success_count,
-            "failure_count": failure_count,
-        }
-
-        # Log summary
-        logger.info(
-            "Processing complete: %s total, %s successful, %s failed",
-            total_processed,
-            success_count,
-            failure_count,
-        )
-
-        # Raise exception if any ingestion failed to ensure the task fails
-        if failed_ingestions:
-            error_details = "; ".join([
-                f"{f['ingestion_id']}: {f['error'][:100]}"  # Truncate long errors
-                for f in failed_ingestions[:5]  # Show first 5 failures
-            ])
-            if failure_count > 5:
-                error_details += f" ... and {failure_count - 5} more failures"
+            ingestion_service = DataIngestionService(db.session_factory)
+            warehouse_service = WarehouseDataService(db.session_factory)
             
-            raise RuntimeError(
-                f"Data ingestion pipeline failed: {failure_count}/{total_processed} ingestions failed. "
-                f"Failures: {error_details}"
+            ingestions = await ingestion_service.get_pending_ingestions(BATCH_SIZE)
+            
+            if not ingestions:
+                logger.info("No pending ingestions found")
+                return {
+                    "ingestions_processed": 0,
+                    "rows_inserted": 0,
+                    "has_data": False,
+                }
+            
+            large_file_threshold_bytes = LARGE_FILE_THRESHOLD_MB * 1024 * 1024
+            
+            logger.info("Processing %s ingestions", len(ingestions))
+            
+            summary = await warehouse_service.process_ingestions(
+                ingestions,
+                large_file_threshold_bytes,
+                CHUNK_SIZE,
             )
-
-        return summary
-
-    summaries = run_async_from_sync(_process_ingestions())
-    context["ti"].xcom_push(key="processed_ingestions", value=summaries)
-    return summaries
-
-
-def load_to_warehouse(**context) -> dict[str, Any]:
-    """Summarize the work already written to the warehouse.
+            
+            if summary.failure_count > 0:
+                error_details = "; ".join([
+                    f"{f.ingestion_id}: {f.error[:100]}"
+                    for f in summary.failed[:5]
+                ])
+                if summary.failure_count > 5:
+                    error_details += f" ... and {summary.failure_count - 5} more failures"
+                
+                logger.error(
+                    "Data ingestion failed: %s/%s ingestions failed. Failures: %s",
+                    summary.failure_count,
+                    summary.total,
+                    error_details,
+                )
+                raise RuntimeError(
+                    f"Data ingestion failed: {summary.failure_count}/{summary.total} ingestions failed. "
+                    f"Failures: {error_details}"
+                )
+            
+            total_rows = sum(s.rows_inserted for s in summary.successful)
+            logger.info(
+                "Ingestion complete: %s successful, %s rows inserted",
+                summary.success_count,
+                total_rows,
+            )
+            
+            return {
+                "ingestions_processed": summary.total,
+                "rows_inserted": total_rows,
+                "has_data": total_rows > 0,
+            }
+        finally:
+            await db.stop()
     
-    This task runs after validate_and_transform_data, which already inserts
-    data into the warehouse. This task just logs the summary.
-    """
-    summary = context["ti"].xcom_pull(
-        key="processed_ingestions", task_ids="validate_and_transform_data"
+    result: Final[dict[str, Any]] = run_async_from_sync(_ingest())
+    context["ti"].xcom_push(key="ingestion_result", value=result)
+    return result
+
+def materialize_features(**context) -> dict[str, Any]:
+    
+    ingestion_result = context["ti"].xcom_pull(
+        key="ingestion_result", task_ids="ingest_data"
     ) or {}
+    
+    has_data = ingestion_result.get("has_data", False)
+    if not has_data:
+        logger.info("No data ingested, skipping feature materialization")
+        return {
+            "features_computed": False,
+            "feature_version_id": None,
+        }
+    
+    async def _materialize():
+        db = AsyncDB()
+        await db.start()
+        try:
+            feature_service = FeatureStoreService(db.session_factory)
+            
+            feature_window_start, feature_window_end, incomplete_version = await feature_service.determine_feature_window(
+                lookback_days=FEATURE_LOOKBACK_DAYS,
+                fallback_to_current_time=True,
+                check_incomplete_first=True,
+            )
+            
+            if incomplete_version:
+                logger.info(
+                    "Resuming from incomplete version %s with window %s to %s",
+                    incomplete_version.version,
+                    feature_window_start,
+                    feature_window_end,
+                )
+            
+            if feature_window_start >= feature_window_end:
+                raise ValueError(
+                    f"Invalid feature window: start ({feature_window_start}) must be before end ({feature_window_end})"
+                )
+            
+            logger.info(
+                "Computing features for window: %s to %s (lookback: %s days)",
+                feature_window_start,
+                feature_window_end,
+                FEATURE_LOOKBACK_DAYS,
+            )
+            
+            try:
+                result_dto = await feature_service.materialize_features(
+                    feature_window_start,
+                    feature_window_end,
+                    LABEL_HORIZON_DAYS,
+                )
+                
+                logger.info(
+                    "Features computed: version %s, %s users",
+                    result_dto.version,
+                    result_dto.total_users,
+                )
+                
+                return {
+                    "features_computed": True,
+                    "feature_version_id": result_dto.feature_version_id,
+                    "feature_version": result_dto.version,
+                    "total_users": result_dto.total_users,
+                    "total_records": result_dto.total_records,
+                }
+            except ValueError as e:
+                if "No features generated" in str(e):
+                    logger.warning(
+                        "No features generated for window %s to %s. This may be normal if there's no data yet.",
+                        feature_window_start,
+                        feature_window_end,
+                    )
+                    return {
+                        "features_computed": False,
+                        "feature_version_id": None,
+                    }
+                raise
+        finally:
+            await db.stop()
+    
+    result: Final[dict[str, Any]] = run_async_from_sync(_materialize())
+    context["ti"].xcom_push(key="feature_result", value=result)
+    return result
 
-    if not summary or not isinstance(summary, dict):
-        logger.info("No ingestions processed in previous step.")
-        return {}
-
-    total = summary.get("total", 0)
-    success_count = summary.get("success_count", 0)
-    failure_count = summary.get("failure_count", 0)
-    successful = summary.get("successful", [])
-
-    logger.info(
-        "Warehouse load summary: %s total, %s successful, %s failed",
-        total,
-        success_count,
-        failure_count,
-    )
-
-    for item in successful:
-        logger.info(
-            "Ingestion %s inserted %s rows into warehouse_data",
-            item.get("ingestion_id"),
-            item.get("rows_inserted"),
-        )
-
-    return summary
-
+def publish_online_features(**context) -> dict[str, Any]:
+    
+    feature_result = context["ti"].xcom_pull(
+        key="feature_result", task_ids="materialize_features"
+    ) or {}
+    
+    features_computed = feature_result.get("features_computed", False)
+    feature_version_id = feature_result.get("feature_version_id")
+    
+    if not features_computed or not feature_version_id:
+        logger.info("No features to publish, skipping online feature publish")
+        return feature_result
+    
+    async def _publish():
+        db = AsyncDB()
+        await db.start()
+        try:
+            feature_service = FeatureStoreService(db.session_factory)
+            await feature_service.publish_online_features(feature_version_id)
+            logger.info("Published features to online store")
+            return feature_result
+        finally:
+            await db.stop()
+    
+    result: Final[dict[str, Any]] = run_async_from_sync(_publish())
+    return result
 
 with DAG(
     "data_ingestion_pipeline",
     default_args=default_args,
-    description="ETL pipeline for data ingestion: Validate → Transform → Load",
+    description="ETL pipeline: Ingest → Transform → Load → Feature Engineering",
     schedule="@hourly",
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     catchup=False,
-    tags=["data_lake", "data_warehouse", "etl"],
+    tags=["data_lake", "data_warehouse", "etl", "feature_store"],
     max_active_runs=3,
     max_active_tasks=10,
     doc_md="""
-    # Data Ingestion ETL Pipeline
-
-    Processes data ingestion requests:
-    1. **Extract**: Get pending ingestions from database
-    2. **Validate**: Download from MinIO, validate fields exist
-    3. **Transform**: Clean and transform data using parsers
-    4. **Load**: Insert into data warehouse
+    # Data Ingestion Pipeline
+    
+    Processes data ingestion and feature engineering in separate tasks:
+    1. **Ingest Data**: Get pending ingestions, validate, transform, load into warehouse
+    2. **Materialize Features**: Compute aggregated features from warehouse data
+    3. **Publish Online Features**: Push latest features to Redis for low-latency inference
     """,
 ) as dag:
-    get_pending_task = PythonOperator(
-        task_id="get_pending_ingestions", python_callable=get_pending_ingestions
+    init_db_task = PythonOperator(
+        task_id="init_db",
+        python_callable=init_db,
     )
-
-    validate_and_transform_task = PythonOperator(
-        task_id="validate_and_transform_data", python_callable=validate_and_transform_data
+    
+    ingest_task = PythonOperator(
+        task_id="ingest_data",
+        python_callable=ingest_data,
     )
-
-    load_task = PythonOperator(
-        task_id="load_to_warehouse", python_callable=load_to_warehouse
+    
+    materialize_task = PythonOperator(
+        task_id="materialize_features",
+        python_callable=materialize_features,
     )
-
-    get_pending_task >> validate_and_transform_task >> load_task
+    
+    publish_task = PythonOperator(
+        task_id="publish_online_features",
+        python_callable=publish_online_features,
+    )
+    
+    init_db_task >> ingest_task >> materialize_task >> publish_task

@@ -1,10 +1,10 @@
-from typing import Callable, Type
+from typing import Callable, Final, Type
 
 from .interfaces import AsyncPublisher, AsyncSubscriber, Marshaler
 
-_PUB_REG: dict[str, Type[AsyncPublisher]] = {}
-_SUB_REG: dict[str, Type[AsyncSubscriber]] = {}
-_MARSHALER_REG: dict[str, Type[Marshaler]] = {}
+_PUB_REG: Final[dict[str, Type[AsyncPublisher]]] = {}
+_SUB_REG: Final[dict[str, Type[AsyncSubscriber]]] = {}
+_MARSHALER_REG: Final[dict[str, Type[Marshaler]]] = {}
 
 def register_marshaler(name: str) -> Callable[[Type[Marshaler]], Type[Marshaler]]:
     def _wrap(cls: Type[Marshaler]):

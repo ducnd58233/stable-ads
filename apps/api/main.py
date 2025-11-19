@@ -6,8 +6,8 @@ from core.infra.blob.registry import get_blob
 from core.infra.mq import create_publisher, create_marshaler
 from core.infra.container import Infra
 from core.settings.config import get_settings
-from modules.jobs.api import router as jobs_router
-from modules.data_ingestion.api import router as data_ingestion_router
+from modules.jobs import jobs_router
+from modules.data_ingestion import data_ingestion_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

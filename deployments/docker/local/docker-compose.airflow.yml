@@ -10,12 +10,15 @@ x-airflow-common: &airflow-common
 x-airflow-common-env: &airflow-common-env
   AIRFLOW__CORE__EXECUTOR: LocalExecutor
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_DB:-stable-ads}
-  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
   AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
   AIRFLOW__API__API_SERVER_URL: http://airflow-api-server:8080
   AIRFLOW__API__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution
   AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_API_JWT_SECRET:-change-me-exec-api}
+  AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+  AIRFLOW__LOGGING__DAG_PROCESSOR_MANAGER_LOG_LOCATION: /opt/airflow/logs/dag_processor_manager/dag_processor_manager.log
+  AIRFLOW__LOGGING__TASK_LOG_PREFIX_TEMPLATE: "{{ ti.dag_id }}/{{ ti.task_id }}/{{ ts }}/{{ try_number }}.log"
   PYTHONPATH: /opt/airflow/project:/home/airflow/.local/lib/python3.13/site-packages
   DB_HOST: postgres
   DB_DB: ${DB_DB:-stable-ads}
@@ -24,6 +27,7 @@ x-airflow-common-env: &airflow-common-env
   STORAGE_ENDPOINT: minio:9000
   STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-minioadmin}
   STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-minioadmin}
+  MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
 
 x-airflow-common-volumes: &airflow-common-volumes
   - ../../../:/opt/airflow/project
@@ -62,6 +66,8 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
     environment:
       <<: *airflow-runtime-env
     volumes: *airflow-common-volumes
@@ -85,6 +91,8 @@ services:
       airflow-init:
         condition: service_completed_successfully
       airflow-api-server:
+        condition: service_healthy
+      mlflow:
         condition: service_healthy
     environment:
       <<: *airflow-runtime-env
