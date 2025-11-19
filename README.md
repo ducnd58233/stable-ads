@@ -21,6 +21,7 @@ Stable Ads is an end-to-end ML system designed to predict customer purchase prob
 - **Feature Store**: Offline feature materialization and online feature serving via Redis
 - **ML Training**: PyTorch-based neural network training with MLflow integration
 - **Real-time Inference**: Low-latency predictions for both registered users and anonymous sessions
+- **Personalized Video Ad Generation**: AI-powered video ad creation using Stable Video Diffusion (SVD) and LLM-based script generation
 - **Orchestration**: Airflow DAGs for automated data pipelines and model training
 - **Scalable Infrastructure**: PostgreSQL, MinIO, Kafka, Redis, and Airflow
 
@@ -30,14 +31,60 @@ Stable Ads is an end-to-end ML system designed to predict customer purchase prob
 2. **Processing Layer**: Airflow (orchestration), Python services (data processing)
 3. **ML Layer**: PyTorch (training), Feature Store (offline/online), Model Registry (MinIO)
 4. **Serving Layer**: FastAPI (REST API), Real-time feature computation
+5. **Video Generation Layer**: LangGraph (script generation), Stable Video Diffusion (video rendering), Kafka (job queue)
 
 ## Architecture
 ![System Diagram](./assets/system-diagram.png)
 
+### End-to-End Flow: From Data to Video Ads
+
+```mermaid
+flowchart TB
+    subgraph "Data Pipeline"
+        A[CSV File Upload] --> B[Data Ingestion API]
+        B --> C[MinIO: Store Raw File]
+        C --> D[Airflow: Process Ingestion]
+        D --> E[Warehouse: Store Events]
+        E --> F[Feature Store: Compute Features]
+        F --> G[Redis: Cache Online Features]
+    end
+    
+    subgraph "ML Pipeline"
+        H[Airflow: Training DAG] --> I[Load Features]
+        I --> J[Train PyTorch Model]
+        J --> K[Save Model to MinIO]
+        K --> L[Register Production Model]
+    end
+    
+    subgraph "Prediction & Ad Generation"
+        M[API: Prediction Request] --> N[Get User Features]
+        N --> O[ML Model: Predict Purchase]
+        O --> P{Will Purchase?<br/>Probability >= Threshold}
+        P -->|No| Q[Return Prediction Only]
+        P -->|Yes| R[PurchaseOrchestrator]
+        R --> S[Generate Personalized Prompt<br/>Based on User Features]
+        S --> T[Create Video Job]
+        T --> U[Publish to Kafka<br/>Topic: RENDER_REQUESTS]
+        U --> V[Worker: Consume from Kafka]
+        V --> W[LLM Agent: Generate Video Script<br/>LangGraph]
+        W --> X[Video Renderer: Generate Video<br/>SVD/AnimatedDiff]
+        X --> Y[MinIO: Upload Video]
+        Y --> Z[Update Job Status: SUCCEEDED]
+        Z --> AA[Return Video URL]
+    end
+    
+    style A fill:#e1f5ff
+    style G fill:#c8e6c9
+    style L fill:#c8e6c9
+    style Q fill:#fff9c4
+    style AA fill:#c8e6c9
+    style P fill:#ffccbc
+```
+
 ## System Components
 
 ### 1. Data Ingestion Module (`modules/data_ingestion/`)
-(The ![dataset can be found here](https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store/data). This dataset contains behavior data from over 285 million user events on a large multi-category eCommerce website.)
+(The [dataset can be found here](https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store/data). This dataset contains behavior data from over 285 million user events on a large multi-category eCommerce website.)
 - **Purpose**: Handles file uploads, validation, parsing, and loading into the data warehouse
 - **Features**:
   - Multi-format file parsing (CSV with extensible parser architecture)
@@ -90,7 +137,35 @@ Stable Ads is an end-to-end ML system designed to predict customer purchase prob
   - Data ingestion endpoints
   - ML prediction endpoints
   - Job management endpoints
-- **Worker Service** (`apps/worker/`): Background processing service
+- **Worker Service** (`apps/worker/`): Background processing service for video rendering
+- **Video Rendering Module** (`modules/render/`): Generates personalized video ads using Stable Video Diffusion (SVD) or AnimatedDiff
+- **Orchestrator Module** (`modules/orchestrator/`): Coordinates prediction and ad generation with LLM-based script generation
+
+### 7. Video Ad Generation Module (`modules/render/` & `modules/orchestrator/`)
+
+- **Purpose**: Generates personalized video advertisements based on purchase predictions and user features
+- **Components**:
+  - **Purchase Orchestrator**: Coordinates the end-to-end flow from prediction to video generation
+  - **LLM Agent (LangGraph)**: Generates video scripts using LangChain/LangGraph with tool support
+  - **Video Renderer**: Renders videos using diffusion models (SVD or AnimatedDiff)
+  - **Job Management**: Tracks video generation jobs through Kafka message queue
+- **Workflow**:
+  1. When a user's purchase probability exceeds the threshold, the orchestrator is triggered
+  2. Personalized prompt is generated based on user features (categories, brands, price range, purchase history)
+  3. Video generation job is created and published to Kafka
+  4. Worker service consumes the job and uses LLM agent to generate a structured video script
+  5. Video renderer uses Stable Video Diffusion to generate video from the script
+  6. Generated video is uploaded to MinIO and job status is updated
+- **Personalization Features**:
+  - Product category and brand preferences
+  - Price range and quality indicators
+  - Purchase behavior (new vs returning customer)
+  - Purchase probability score (high-intent vs engaging presentation)
+- **Video Backends**:
+  - **SVD (Stable Video Diffusion)**: Text-to-image keyframes with video diffusion animation
+  - **AnimatedDiff**: Alternative animation backend (configurable)
+- **Storage**: Generated videos stored in MinIO with presigned URLs for secure access
+
 
 ## Setup and Installation
 
@@ -182,6 +257,38 @@ The system uses Airflow for orchestration. Once Airflow is running:
    - `purchase_training_dag` (runs weekly)
 3. Monitor task execution and logs
 
+### Video Ad Generation Workflow
+
+The video ad generation process is triggered automatically when a purchase prediction indicates high purchase probability:
+
+1. **Make a Prediction Request**:
+   ```bash
+   curl -X POST "http://localhost:8000/v1/ml/predict/user/123"
+   ```
+
+2. **If `will_purchase=true`**:
+   - The system automatically creates a video generation job
+   - Job is published to Kafka (`RENDER_REQUESTS` topic)
+   - Worker service processes the job asynchronously
+
+3. **Monitor Job Progress**:
+   ```bash
+   # Get job status (job_id is linked to the prediction)
+   curl "http://localhost:8000/v1/jobs/{job_id}"
+   ```
+
+4. **Job States**:
+   - `PENDING`: Job created, waiting in Kafka queue
+   - `RUNNING`: Worker is processing (script generation + video rendering)
+   - `SUCCEEDED`: Video generated and available via presigned URL
+   - `FAILED`: Error occurred during processing
+
+5. **Access Generated Video**:
+   - When status is `SUCCEEDED`, use the `presigned_url` from the job response
+   - Presigned URLs expire after 1 hour (configurable)
+
+**Note**: Ensure the Worker Service is running to process video generation jobs. The worker consumes messages from Kafka and generates videos using GPU-accelerated diffusion models.
+
 ## API Endpoints
 
 ### Data Ingestion
@@ -224,13 +331,83 @@ curl -X POST "http://localhost:8000/v1/ml/predict/user/123?model_version=v202411
 }
 ```
 
+### Video Ad Generation
+
+**POST** `/v1/ml/predict/user/{user_id}` (with automatic ad generation)
+- When `will_purchase=true`, the system automatically:
+  1. Generates a personalized prompt based on user features
+  2. Creates a video generation job
+  3. Publishes job to Kafka for processing
+  4. Returns prediction with job_id (if ad generation was triggered)
+
+**POST** `/v1/jobs`
+- Manually create a video generation job
+- Request body:
+  ```json
+  {
+    "prompt": "Showcase electronics products from BrandX with premium aesthetic",
+    "style": "neutral",
+    "duration_sec": 30
+  }
+  ```
+- Returns job ID for tracking
+
+**GET** `/v1/jobs/{job_id}`
+- Get video generation job status and result
+- Response includes:
+  - `status`: PENDING, RUNNING, SUCCEEDED, FAILED
+  - `progress`: 0-100 percentage
+  - `script`: Generated video script (JSON)
+  - `presigned_url`: Direct download URL for generated video (when SUCCEEDED)
+
+**Example: Complete Prediction with Ad Generation Flow**
+
+```bash
+# 1. Make prediction request
+curl -X POST "http://localhost:8000/v1/ml/predict/user/123"
+
+# Response (if will_purchase=true):
+{
+  "purchase_probability": 0.82,
+  "will_purchase": true,
+  "model_version": "v20241119_120000",
+  "feature_version_id": "v20241119_100000_abc12345",
+  "model_path": "models/purchase/v20241119_120000.pt",
+  "user_id": 123
+}
+
+# 2. Check job status (job_id is linked to prediction)
+curl "http://localhost:8000/v1/jobs/{job_id}"
+
+# Response (when SUCCEEDED):
+{
+  "id": "job-uuid-here",
+  "status": "SUCCEEDED",
+  "progress": 100,
+  "script": {
+    "title": "Premium Electronics Showcase",
+    "beats": [
+      {
+        "scene": "Dynamic product shots with smooth transitions",
+        "seconds": 15.0
+      },
+      {
+        "scene": "Clear call-to-action presentation",
+        "seconds": 15.0
+      }
+    ]
+  },
+  "presigned_url": "https://minio:9000/videos/job-uuid-here.mp4?presigned-params"
+}
+```
+
 ### Job Management
 
 **POST** `/v1/jobs`
-- Create background jobs
+- Create background video generation jobs
 
 **GET** `/v1/jobs/{job_id}`
-- Get job status
+- Get video generation job status, script, and video URL
 
 ## Folder Structure
 
@@ -340,5 +517,10 @@ stable-ads/
 - **ML Framework**: PyTorch, LLM langchain/langgraph
 - **MLOps**: MLflow
 - **Orchestration**: Apache Airflow
+- **Video Generation**: 
+  - Stable Video Diffusion (SVD) for video animation
+  - Stable Diffusion XL for text-to-image keyframes
+  - LangGraph for script generation with LLM agents
+- **Message Queue**: Kafka for asynchronous video job processing
 - **Package Management**: uv
 - **Containerization**: Docker, Docker Compose
