@@ -130,6 +130,34 @@ class CacheSettings(BaseModel):
         else:
             raise ValueError(f"Unsupported cache driver: {self.driver}")
 
+class MLPredictionSettings(BaseModel):
+    purchase_probability_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Threshold for purchase probability to trigger ad generation"
+    )
+    model_cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=0,
+        description="Time to live for cached models in seconds"
+    )
+    batch_prediction_size: int = Field(
+        default=1000,
+        ge=1,
+        description="Batch size for batch predictions"
+    )
+    new_customer_lookback_days: int = Field(
+        default=30,
+        ge=1,
+        description="Number of days to look back for new customer feature computation"
+    )
+    realtime_feature_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=0,
+        description="Time to live for cached real-time features in seconds (5 minutes)"
+    )
+
 
 class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
@@ -139,6 +167,7 @@ class Settings(BaseSettings):
     mq: MQSettings = Field(default_factory=MQSettings)
     mlflow: MLflowSettings = Field(default_factory=MLflowSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
+    ml_prediction: MLPredictionSettings = Field(default_factory=MLPredictionSettings)
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH,

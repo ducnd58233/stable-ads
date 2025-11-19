@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from core.infra.db.async_db import AsyncDB
 from core.infra.db.model import Base
 from core.infra.blob.registry import get_blob
+from core.infra.cache.registry import get_cache
 from core.infra.mq import create_subscriber, create_marshaler, AsyncSubscriber, mw_retry_dlq, Topics
 from core.infra.container import Infra
 from core.settings.config import get_settings
@@ -27,14 +28,17 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
 
     blob = get_blob(); await blob.start()
+    cache = get_cache()
+    await cache.start()
     marshaler = create_marshaler("json", version="v1")
 
     app.state.infra = Infra(
         engine=rt.db.engine,
         session_factory=rt.db.session_factory,
         blob=blob,
-        publisher=None,         # type: ignore
+        publisher=None,
         marshaler=marshaler,
+        cache=cache,
     )
 
     rt.handler = JobsHandler(app.state.infra)
@@ -49,7 +53,7 @@ async def lifespan(app: FastAPI):
                     continue
                 try:
                     payload = marshaler.loads(env)
-                    await rt.handler.handle(payload)  # graph.ainvoke inside
+                    await rt.handler.handle(payload)
                     await rt.sub.commit(env)
                 except Exception as e:
                     print(f"Error handling message: {e}")
@@ -71,6 +75,7 @@ async def lifespan(app: FastAPI):
         if rt.handler:
             await rt.handler.close()
         await blob.stop()
+        await cache.stop()
         await rt.db.stop()
 
 app = FastAPI(title="stable-ads-worker", lifespan=lifespan)

@@ -10,18 +10,7 @@ from core.infra.db.model import Base
 from core.utils.run_in_thread import run_async_from_sync
 from modules.ml import MLService
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-)
-
 logger = logging.getLogger(__name__)
-
-for module_name in ['modules.warehouse', 'modules.feature_store', 'modules.ml', 'modules.data_ingestion']:
-    module_logger = logging.getLogger(module_name)
-    module_logger.setLevel(logging.INFO)
-    module_logger.propagate = True
 
 TRAIN_EPOCHS = int(Variable.get("TRAIN_EPOCHS", default_var=10))
 BATCH_SIZE = int(Variable.get("TRAIN_BATCH_SIZE", default_var=64))

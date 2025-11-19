@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, AsyncSession
 from core.infra.blob.interface import AsyncBlobStorage
 from core.infra.mq import AsyncPublisher, Marshaler
+from core.infra.cache import AsyncCache
 
 @dataclass(slots=True)
 class Infra:
@@ -11,3 +12,4 @@ class Infra:
     blob: AsyncBlobStorage
     publisher: AsyncPublisher
     marshaler: Marshaler
+    cache: AsyncCache

@@ -1,4 +1,7 @@
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+
+from modules.feature_store import UserFeatureDTO
+from modules.ml import PurchasePredictionDTO
 from .repository import JobRepository
 from .model import Job
 from .domain import JobStatus
@@ -52,3 +55,36 @@ class JobService:
     async def set_failed(self, job_id: str) -> None:
         async with self._sf() as s, s.begin():
             await self._repo.set_status(s, job_id, status=JobStatus.FAILED.value)
+    
+    async def create_from_prediction(
+        self,
+        user_id: int,
+        prediction: PurchasePredictionDTO,
+        user_features: UserFeatureDTO,
+    ) -> Job:
+        """
+        Create a job from purchase prediction with personalized prompt.
+        
+        Args:
+            user_id: User identifier
+            prediction: Purchase prediction result
+            user_features: User feature data for personalization
+        
+        Returns:
+            Created Job
+        """
+        from modules.orchestrator.purchase_orchestrator import PurchaseOrchestrator
+        orchestrator = PurchaseOrchestrator(self._sf)
+        
+        # Generate personalized prompt
+        prompt = orchestrator._generate_personalized_prompt(user_features, prediction)
+        
+        # Create job
+        from modules.jobs.dto import CreateJobRequest
+        job_request = CreateJobRequest(
+            prompt=prompt,
+            style="neutral",
+            duration_sec=30,
+        )
+        
+        return await self.create(job_request)

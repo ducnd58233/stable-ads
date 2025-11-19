@@ -3,7 +3,7 @@ from typing import Iterable, Sequence, Type, TypeVar
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.settings.config import get_settings
 from langchain.chat_models import init_chat_model
@@ -13,7 +13,7 @@ T = TypeVar("T", bound=BaseModel)
 class LLMToolSpec(BaseModel):
     name: str
     description: str
-    schema: dict 
+    json_schema: dict = Field(..., alias="schema") 
 
 class ToolCall(BaseModel):
     tool_name: str

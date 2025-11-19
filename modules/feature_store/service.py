@@ -1,6 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 from core.infra.blob.registry import get_blob
 from core.infra.blob.buckets import Buckets
@@ -13,7 +14,6 @@ from .purchase_features import PurchaseFeatureBuilder
 from modules.warehouse.repository import WarehouseDataRepository
 import logging
 import asyncio
-import pendulum
 
 logger = logging.getLogger(__name__)
 
@@ -69,24 +69,22 @@ class FeatureStoreService:
         
         if max_time is not None:
             if isinstance(max_time, str):
-                feature_window_end = pendulum.parse(max_time)
+                feature_window_end = datetime.fromisoformat(max_time.replace("Z", "+00:00"))
             else:
-                feature_window_end = pendulum.instance(max_time)
+                feature_window_end = max_time
             
-            if not feature_window_end.timezone:
-                feature_window_end = feature_window_end.in_timezone("UTC")
+            if feature_window_end.tzinfo is None:
+                feature_window_end = feature_window_end.replace(tzinfo=ZoneInfo("UTC"))
+            elif feature_window_end.tzinfo != ZoneInfo("UTC"):
+                feature_window_end = feature_window_end.astimezone(ZoneInfo("UTC"))
             
             label_horizon_days = LABEL_HORIZON_DAYS
-            adjusted_end = feature_window_end - timedelta(days=label_horizon_days)
-            
-            if adjusted_end > feature_window_start:
-                feature_window_end = adjusted_end
-                logger.info(
-                    "Adjusted feature_window_end from %s to %s to account for %s-day label horizon",
-                    max_time,
-                    feature_window_end,
-                    label_horizon_days,
-                )
+            feature_window_end = feature_window_end - timedelta(days=label_horizon_days)
+            logger.info(
+                "Adjusted feature_window_end to %s to account for %s-day label horizon",
+                feature_window_end,
+                label_horizon_days,
+            )
             
             feature_window_start = feature_window_end - timedelta(days=lookback_days)
             
@@ -98,9 +96,8 @@ class FeatureStoreService:
             
             return (feature_window_start, feature_window_end, None)
         
-        # Fallback: Use current time
         if fallback_to_current_time:
-            feature_window_end = pendulum.now("UTC")
+            feature_window_end = datetime.now(ZoneInfo("UTC"))
             feature_window_start = feature_window_end - timedelta(days=lookback_days)
             
             logger.info(
@@ -453,7 +450,7 @@ class FeatureStoreService:
             if not offline_features:
                 return
             
-            cache = get_cache("redis")
+            cache = get_cache()
             await cache.start()
             try:
                 batch_size = 100
@@ -492,3 +489,286 @@ class FeatureStoreService:
                 raise
             finally:
                 await cache.stop()
+    
+    async def get_user_features_for_prediction(
+        self,
+        user_id: int,
+    ) -> UserFeatureDTO | None:
+        """
+        Get user features for prediction, checking cache first, then database.
+        
+        Args:
+            user_id: User identifier
+        
+        Returns:
+            UserFeatureDTO if found, None otherwise
+        """
+        # Try cache first
+        cache = get_cache()
+        await cache.start()
+        try:
+            key = f"features:user:{user_id}"
+            cached_data = await cache.get_json(key)
+            
+            if cached_data:
+                logger.debug("Found user %s features in cache", user_id)
+                return UserFeatureDTO(
+                    user_id=cached_data["user_id"],
+                    feature_version_id=cached_data.get("feature_version_id"),
+                    session_count=cached_data.get("session_count"),
+                    session_duration_avg=cached_data.get("session_duration_avg"),
+                    page_views_per_session=cached_data.get("page_views_per_session"),
+                    total_spend=cached_data.get("total_spend"),
+                    purchase_count=cached_data.get("purchase_count"),
+                    avg_order_value=cached_data.get("avg_order_value"),
+                    days_since_last_purchase=cached_data.get("days_since_last_purchase"),
+                    days_since_last_event=cached_data.get("days_since_last_event"),
+                    days_since_first_event=cached_data.get("days_since_first_event"),
+                    top_category_1=cached_data.get("top_category_1"),
+                    top_category_2=cached_data.get("top_category_2"),
+                    top_brand_1=cached_data.get("top_brand_1"),
+                    top_brand_2=cached_data.get("top_brand_2"),
+                    price_range_min=cached_data.get("price_range_min"),
+                    price_range_max=cached_data.get("price_range_max"),
+                    price_range_avg=cached_data.get("price_range_avg"),
+                    purchased=0,
+                )
+        except Exception as e:
+            logger.warning("Error reading from cache for user %s: %s", user_id, str(e))
+        finally:
+            await cache.stop()
+        
+        async with self._sf() as s:
+            feature = await self._repo.get_offline_feature_by_user_id(s, user_id)
+            
+            if not feature:
+                logger.debug("User %s not found in feature store", user_id)
+                return None
+            
+            logger.debug("Found user %s features in database", user_id)
+            return UserFeatureDTO(
+                user_id=feature.user_id,
+                feature_version_id=feature.feature_version_id,
+                session_count=feature.session_count,
+                session_duration_avg=feature.session_duration_avg,
+                page_views_per_session=feature.page_views_per_session,
+                total_spend=feature.total_spend,
+                purchase_count=feature.purchase_count,
+                avg_order_value=feature.avg_order_value,
+                days_since_last_purchase=feature.days_since_last_purchase,
+                days_since_last_event=feature.days_since_last_event,
+                days_since_first_event=feature.days_since_first_event,
+                top_category_1=feature.top_category_1,
+                top_category_2=feature.top_category_2,
+                top_brand_1=feature.top_brand_1,
+                top_brand_2=feature.top_brand_2,
+                price_range_min=feature.price_range_min,
+                price_range_max=feature.price_range_max,
+                price_range_avg=feature.price_range_avg,
+                purchased=0,
+            )
+    
+    async def compute_features_for_user(
+        self,
+        user_id: int,
+        lookback_days: int = 30,
+    ) -> UserFeatureDTO | None:
+        """
+        Compute features for a user on-the-fly from warehouse data.
+        Used for new customers or when features are not in feature store.
+        
+        Args:
+            user_id: User identifier
+            lookback_days: Number of days to look back for events
+        
+        Returns:
+            UserFeatureDTO if events found, None if no events exist
+        """
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from core.settings.config import get_settings
+        from modules.feature_store.purchase_features import PurchaseFeatureBuilder
+        
+        settings = get_settings()
+        cache_ttl = settings.ml_prediction.realtime_feature_cache_ttl_seconds
+        
+        # Check cache first
+        cache = get_cache()
+        await cache.start()
+        try:
+            cache_key = f"realtime_features:user:{user_id}:{lookback_days}"
+            cached_data = await cache.get_json(cache_key)
+            
+            if cached_data:
+                logger.debug("Found real-time features in cache for user %s", user_id)
+                return UserFeatureDTO(
+                    user_id=cached_data["user_id"],
+                    feature_version_id=None,  # Real-time features don't have version
+                    session_count=cached_data.get("session_count"),
+                    session_duration_avg=cached_data.get("session_duration_avg"),
+                    page_views_per_session=cached_data.get("page_views_per_session"),
+                    total_spend=cached_data.get("total_spend"),
+                    purchase_count=cached_data.get("purchase_count"),
+                    avg_order_value=cached_data.get("avg_order_value"),
+                    days_since_last_purchase=cached_data.get("days_since_last_purchase"),
+                    days_since_last_event=cached_data.get("days_since_last_event"),
+                    days_since_first_event=cached_data.get("days_since_first_event"),
+                    top_category_1=cached_data.get("top_category_1"),
+                    top_category_2=cached_data.get("top_category_2"),
+                    top_brand_1=cached_data.get("top_brand_1"),
+                    top_brand_2=cached_data.get("top_brand_2"),
+                    price_range_min=cached_data.get("price_range_min"),
+                    price_range_max=cached_data.get("price_range_max"),
+                    price_range_avg=cached_data.get("price_range_avg"),
+                    purchased=0,
+                )
+        except Exception as e:
+            logger.warning("Error reading real-time features cache for user %s: %s", user_id, str(e))
+        finally:
+            await cache.stop()
+        
+        async with self._sf() as s:
+            event_count = await self._warehouse_repo.get_user_events_count(s, user_id, lookback_days)
+            
+            if event_count == 0:
+                logger.debug("User %s has no events in last %s days", user_id, lookback_days)
+                return None
+            
+            user_events = await self._warehouse_repo.get_user_events_recent(s, user_id, lookback_days)
+            
+            if not user_events:
+                logger.debug("User %s has no events after query", user_id)
+                return None
+            
+            feature_window_end = datetime.now(ZoneInfo("UTC"))
+            builder = PurchaseFeatureBuilder(s)
+            
+            try:
+                feature_dto = builder._compute_features_from_events(
+                    user_id=user_id,
+                    user_events=user_events,
+                    feature_window_end=feature_window_end,
+                    purchased_users=None,
+                )
+                
+                cache = get_cache()
+                await cache.start()
+                try:
+                    cache_key = f"realtime_features:user:{user_id}:{lookback_days}"
+                    feature_dict = feature_dto.model_dump(exclude={"purchased", "feature_version_id"})
+                    feature_dict["user_id"] = user_id
+                    await cache.set_json(cache_key, feature_dict, ttl=cache_ttl)
+                    logger.debug("Cached real-time features for user %s", user_id)
+                except Exception as e:
+                    logger.warning("Error caching real-time features for user %s: %s", user_id, str(e))
+                finally:
+                    await cache.stop()
+                
+                logger.info("Computed real-time features for user %s from %s events", user_id, len(user_events))
+                return feature_dto
+                
+            except ValueError as e:
+                logger.warning("Failed to compute features for user %s: %s", user_id, str(e))
+                return None
+    
+    async def compute_features_for_session(
+        self,
+        session_id: str,
+    ) -> UserFeatureDTO | None:
+        """
+        Compute features for an anonymous user session on-the-fly from warehouse data.
+        Used for users who haven't logged in yet (no user_id).
+        
+        Args:
+            session_id: Session identifier
+        
+        Returns:
+            UserFeatureDTO if events found, None if no events exist
+        """
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from core.settings.config import get_settings
+        from modules.feature_store.purchase_features import PurchaseFeatureBuilder
+        
+        settings = get_settings()
+        cache_ttl = settings.ml_prediction.realtime_feature_cache_ttl_seconds
+        
+        # Check cache first
+        cache = get_cache()
+        await cache.start()
+        try:
+            cache_key = f"realtime_features:session:{session_id}"
+            cached_data = await cache.get_json(cache_key)
+            
+            if cached_data:
+                logger.debug("Found real-time features in cache for session %s", session_id)
+                return UserFeatureDTO(
+                    user_id=None,  # Anonymous user
+                    feature_version_id=None,
+                    session_count=cached_data.get("session_count"),
+                    session_duration_avg=cached_data.get("session_duration_avg"),
+                    page_views_per_session=cached_data.get("page_views_per_session"),
+                    total_spend=cached_data.get("total_spend"),
+                    purchase_count=cached_data.get("purchase_count"),
+                    avg_order_value=cached_data.get("avg_order_value"),
+                    days_since_last_purchase=cached_data.get("days_since_last_purchase"),
+                    days_since_last_event=cached_data.get("days_since_last_event"),
+                    days_since_first_event=cached_data.get("days_since_first_event"),
+                    top_category_1=cached_data.get("top_category_1"),
+                    top_category_2=cached_data.get("top_category_2"),
+                    top_brand_1=cached_data.get("top_brand_1"),
+                    top_brand_2=cached_data.get("top_brand_2"),
+                    price_range_min=cached_data.get("price_range_min"),
+                    price_range_max=cached_data.get("price_range_max"),
+                    price_range_avg=cached_data.get("price_range_avg"),
+                    purchased=0,
+                )
+        except Exception as e:
+            logger.warning("Error reading real-time features cache for session %s: %s", session_id, str(e))
+        finally:
+            await cache.stop()
+        
+        async with self._sf() as s:
+            event_count = await self._warehouse_repo.get_session_events_count(s, session_id)
+            
+            if event_count == 0:
+                logger.debug("Session %s has no events", session_id)
+                return None
+            
+            user_events = await self._warehouse_repo.get_session_events(s, session_id)
+            
+            if not user_events:
+                logger.debug("Session %s has no events after query", session_id)
+                return None
+            
+            feature_window_end = datetime.now(ZoneInfo("UTC"))
+            builder = PurchaseFeatureBuilder(s)
+            
+            try:
+                feature_dto = builder._compute_features_from_events(
+                    user_id=0,
+                    user_events=user_events,
+                    feature_window_end=feature_window_end,
+                    purchased_users=None,
+                )
+                
+                feature_dto.user_id = None
+                
+                cache = get_cache()
+                await cache.start()
+                try:
+                    cache_key = f"realtime_features:session:{session_id}"
+                    feature_dict = feature_dto.model_dump(exclude={"purchased", "feature_version_id", "user_id"})
+                    await cache.set_json(cache_key, feature_dict, ttl=cache_ttl)
+                    logger.debug("Cached real-time features for session %s", session_id)
+                except Exception as e:
+                    logger.warning("Error caching real-time features for session %s: %s", session_id, str(e))
+                finally:
+                    await cache.stop()
+                
+                logger.info("Computed real-time features for session %s from %s events", session_id, len(user_events))
+                return feature_dto
+                
+            except ValueError as e:
+                logger.warning("Failed to compute features for session %s: %s", session_id, str(e))
+                return None
