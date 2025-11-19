@@ -12,7 +12,7 @@ def register_cache(name: str) -> Callable[[Type[AsyncCache]], Type[AsyncCache]]:
         return cls
     return _wrap
 
-def get_cache(name: str) -> AsyncCache:
+def get_cache() -> AsyncCache:
     cfg = get_settings().cache
     cache_name = cfg.driver.strip().lower()
     if cache_name not in _REGISTRY:

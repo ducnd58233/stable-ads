@@ -13,7 +13,8 @@ from modules.ml.training.purchase_trainer import PurchaseTrainer
 from modules.feature_store.repository import FeatureStoreRepository
 from modules.feature_store.model import MLTrainingRun
 from modules.feature_store.domain import ModelStatus
-from modules.ml.dto import TrainingResultDTO
+from modules.ml.dto import TrainingResultDTO, PurchasePredictionDTO
+from modules.ml.inference import PurchasePredictor
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ class MLService:
         self._sf = session_factory
         self._repo = FeatureStoreRepository()
         self._settings = get_settings()
+        self._predictor = PurchasePredictor(session_factory)
     
     async def train_model(
         self,
@@ -172,5 +174,175 @@ class MLService:
             train_size=len(train_ds),
             val_size=len(val_ds),
             test_size=len(test_ds),
+        )
+    
+    async def predict_purchase(
+        self,
+        user_id: int,
+        model_version: str | None = None,
+        lookback_days: int | None = None,
+    ) -> PurchasePredictionDTO:
+        """
+        Predict purchase probability for a user.
+        Supports both existing customers (from feature store) and new customers (on-the-fly computation).
+        
+        Args:
+            user_id: User identifier
+            model_version: Specific model version to use. If None, uses latest production model.
+            lookback_days: Number of days to look back for new customers. If None, uses default from settings.
+        
+        Returns:
+            PurchasePredictionDTO with prediction results
+        
+        Raises:
+            ValueError: If user has no data (no features and no events)
+        """
+        from modules.feature_store.service import FeatureStoreService
+        from modules.ml.repository import MLRepository
+        from modules.ml.model import PurchasePrediction
+        
+        feature_service = FeatureStoreService(self._sf)
+        ml_repo = MLRepository()
+        
+        feature_dto = await feature_service.get_user_features_for_prediction(user_id)
+        is_new_customer = False
+        
+        if not feature_dto:
+            logger.info("User %s not in feature store, computing features on-the-fly", user_id)
+            lookback_days = lookback_days or self._settings.ml_prediction.new_customer_lookback_days
+            feature_dto = await feature_service.compute_features_for_user(user_id, lookback_days)
+            
+            if not feature_dto:
+                raise ValueError(
+                    f"User {user_id} has no data available. "
+                    f"No features in feature store and no events in last {lookback_days} days."
+                )
+            
+            is_new_customer = True
+            logger.info("Computed real-time features for new customer %s", user_id)
+        
+        feature_version_id = feature_dto.feature_version_id or "realtime"
+        
+        probability, model_version, model_path = await self._predictor.predict(
+            feature_dto,
+            model_version,
+        )
+        
+        threshold = self._settings.ml_prediction.purchase_probability_threshold
+        will_purchase = probability >= threshold
+        
+        prediction_id = str(uuid.uuid4())
+        prediction_record = PurchasePrediction(
+            id=prediction_id,
+            user_id=user_id,
+            purchase_probability=probability,
+            will_purchase=will_purchase,
+            model_version=model_version,
+            feature_version_id=feature_version_id,
+            model_path=model_path,
+            ad_job_id=None,
+        )
+        
+        async with self._sf() as s, s.begin():
+            await ml_repo.create(s, prediction_record)
+        
+        logger.info(
+            "Prediction for user %s: probability=%.4f, will_purchase=%s, is_new_customer=%s",
+            user_id,
+            probability,
+            will_purchase,
+            is_new_customer,
+        )
+        
+        return PurchasePredictionDTO(
+            user_id=user_id,
+            session_id=None,
+            purchase_probability=probability,
+            will_purchase=will_purchase,
+            model_version=model_version,
+            feature_version_id=feature_version_id,
+            model_path=model_path,
+        )
+    
+    async def predict_purchase_from_session(
+        self,
+        session_id: str,
+        model_version: str | None = None,
+    ) -> PurchasePredictionDTO:
+        """
+        Predict purchase probability for an anonymous user session.
+        Used for users who haven't logged in yet (no user_id).
+        
+        Args:
+            session_id: Session identifier
+            model_version: Specific model version to use. If None, uses latest production model.
+        
+        Returns:
+            PurchasePredictionDTO with prediction results
+        
+        Raises:
+            ValueError: If session has no data (no events)
+        """
+        from modules.feature_store.service import FeatureStoreService
+        from modules.ml.repository import MLRepository
+        from modules.ml.model import PurchasePrediction
+        
+        feature_service = FeatureStoreService(self._sf)
+        ml_repo = MLRepository()
+        
+        # Compute features from session events
+        feature_dto = await feature_service.compute_features_for_session(session_id)
+        
+        if not feature_dto:
+            raise ValueError(
+                f"Session {session_id} has no data available. "
+                f"No events found for this session."
+            )
+        
+        logger.info("Computed real-time features for anonymous session %s", session_id)
+        
+        feature_version_id = "realtime_session"
+        
+        # Make prediction
+        probability, model_version, model_path = await self._predictor.predict(
+            feature_dto,
+            model_version,
+        )
+        
+        threshold = self._settings.ml_prediction.purchase_probability_threshold
+        will_purchase = probability >= threshold
+        
+        # Persist prediction to database (with user_id=None for anonymous users)
+        prediction_id = str(uuid.uuid4())
+        prediction_record = PurchasePrediction(
+            id=prediction_id,
+            user_id=None,  # Anonymous user
+            session_id=session_id,
+            purchase_probability=probability,
+            will_purchase=will_purchase,
+            model_version=model_version,
+            feature_version_id=feature_version_id,
+            model_path=model_path,
+            ad_job_id=None,
+        )
+        
+        async with self._sf() as s, s.begin():
+            await ml_repo.create(s, prediction_record)
+        
+        logger.info(
+            "Prediction for anonymous session %s: probability=%.4f, will_purchase=%s",
+            session_id,
+            probability,
+            will_purchase,
+        )
+        
+        return PurchasePredictionDTO(
+            user_id=None,
+            session_id=session_id,
+            purchase_probability=probability,
+            will_purchase=will_purchase,
+            model_version=model_version,
+            feature_version_id=feature_version_id,
+            model_path=model_path,
         )
         

@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, text, func, delete
 from .model import FeatureVersion, MLTrainingRun, ProductionModel, OfflineFeature, TrainingDatasetSplit
-from .domain import FeatureVersionStatus
+from .domain import FeatureVersionStatus, ModelStatus
 from datetime import datetime
 
 class FeatureStoreRepository:
@@ -101,6 +101,33 @@ class FeatureStoreRepository:
             select(ProductionModel)
             .where(ProductionModel.is_active == True)
             .order_by(ProductionModel.activated_at.desc())
+            .limit(1)
+        )
+        result = await s.execute(stmt)
+        return result.scalar_one_or_none()
+    
+    async def get_training_run_by_model_version(
+        self, s: AsyncSession, model_version: str
+    ) -> MLTrainingRun | None:
+        stmt = (
+            select(MLTrainingRun)
+            .where(MLTrainingRun.model_version == model_version)
+            .limit(1)
+        )
+        result = await s.execute(stmt)
+        return result.scalar_one_or_none()
+    
+    async def get_latest_completed_training_run(
+        self, s: AsyncSession
+    ) -> MLTrainingRun | None:
+        stmt = (
+            select(MLTrainingRun)
+            .where(
+                MLTrainingRun.model_path.isnot(None),
+                MLTrainingRun.completed_at.isnot(None),
+                MLTrainingRun.status != ModelStatus.TRAINING.value,
+            )
+            .order_by(MLTrainingRun.completed_at.desc())
             .limit(1)
         )
         result = await s.execute(stmt)
@@ -278,5 +305,18 @@ class FeatureStoreRepository:
         )
         if latest_only:
             stmt = stmt.order_by(TrainingDatasetSplit.created_at.desc()).limit(1)
+        result = await s.execute(stmt)
+        return result.scalar_one_or_none()
+    
+    async def get_offline_feature_by_user_id(
+        self,
+        s: AsyncSession,
+        user_id: int,
+        feature_version_id: str | None = None,
+    ) -> OfflineFeature | None:
+        stmt = select(OfflineFeature).where(OfflineFeature.user_id == user_id)
+        if feature_version_id:
+            stmt = stmt.where(OfflineFeature.feature_version_id == feature_version_id)
+        stmt = stmt.order_by(OfflineFeature.created_at.desc()).limit(1)
         result = await s.execute(stmt)
         return result.scalar_one_or_none()

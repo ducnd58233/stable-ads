@@ -221,3 +221,121 @@ class WarehouseDataRepository:
         if row:
             return (row.min_time, row.max_time)
         return (None, None)
+    
+    async def get_user_events_recent(
+        self,
+        s: AsyncSession,
+        user_id: int,
+        lookback_days: int = 30,
+    ) -> list[WarehouseData]:
+        """
+        Get recent events for a user within lookback window.
+        
+        Args:
+            s: Database session
+            user_id: User identifier
+            lookback_days: Number of days to look back from current time
+        
+        Returns:
+            List of warehouse events ordered by event_time
+        """
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        
+        window_end = datetime.now(ZoneInfo("UTC"))
+        window_start = window_end - timedelta(days=lookback_days)
+        
+        stmt = (
+            select(WarehouseData)
+            .where(
+                WarehouseData.user_id == user_id,
+                WarehouseData.event_time >= window_start,
+                WarehouseData.event_time <= window_end,
+            )
+            .order_by(WarehouseData.event_time)
+        )
+        result = await s.execute(stmt)
+        return list(result.scalars().all())
+    
+    async def get_user_events_count(
+        self,
+        s: AsyncSession,
+        user_id: int,
+        lookback_days: int = 30,
+    ) -> int:
+        """
+        Get count of recent events for a user within lookback window.
+        Quick existence check without loading full data.
+        
+        Args:
+            s: Database session
+            user_id: User identifier
+            lookback_days: Number of days to look back from current time
+        
+        Returns:
+            Count of events
+        """
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        
+        window_end = datetime.now(ZoneInfo("UTC"))
+        window_start = window_end - timedelta(days=lookback_days)
+        
+        stmt = (
+            select(func.count(WarehouseData.id))
+            .where(
+                WarehouseData.user_id == user_id,
+                WarehouseData.event_time >= window_start,
+                WarehouseData.event_time <= window_end,
+            )
+        )
+        result = await s.execute(stmt)
+        count = result.scalar_one()
+        return count or 0
+    
+    async def get_session_events(
+        self,
+        s: AsyncSession,
+        session_id: str,
+    ) -> list[WarehouseData]:
+        """
+        Get all events for a session (for anonymous users).
+        
+        Args:
+            s: Database session
+            session_id: Session identifier
+        
+        Returns:
+            List of warehouse events for the session ordered by event_time
+        """
+        stmt = (
+            select(WarehouseData)
+            .where(WarehouseData.user_session == session_id)
+            .order_by(WarehouseData.event_time)
+        )
+        result = await s.execute(stmt)
+        return list(result.scalars().all())
+    
+    async def get_session_events_count(
+        self,
+        s: AsyncSession,
+        session_id: str,
+    ) -> int:
+        """
+        Get count of events for a session.
+        Quick existence check without loading full data.
+        
+        Args:
+            s: Database session
+            session_id: Session identifier
+        
+        Returns:
+            Count of events
+        """
+        stmt = (
+            select(func.count(WarehouseData.id))
+            .where(WarehouseData.user_session == session_id)
+        )
+        result = await s.execute(stmt)
+        count = result.scalar_one()
+        return count or 0

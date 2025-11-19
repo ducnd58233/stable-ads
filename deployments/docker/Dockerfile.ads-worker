@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock /tmp/
 WORKDIR /tmp
-RUN uv pip install --system --no-cache --group core --group worker --group api
+RUN uv pip install --system --no-cache --group core --group worker --group api --group ml
 
 FROM python-deps AS app
 

@@ -12,18 +12,7 @@ from modules.data_ingestion import DataIngestionService
 from modules.warehouse import WarehouseDataService
 from modules.feature_store import FeatureStoreService
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-)
-
 logger = logging.getLogger(__name__)
-
-for module_name in ['modules.warehouse', 'modules.feature_store', 'modules.ml', 'modules.data_ingestion']:
-    module_logger = logging.getLogger(module_name)
-    module_logger.setLevel(logging.INFO)
-    module_logger.propagate = True
 
 BATCH_SIZE = int(Variable.get("DATA_INGESTION_BATCH_SIZE", default_var=10))
 LARGE_FILE_THRESHOLD_MB = int(Variable.get("LARGE_FILE_THRESHOLD_MB", default_var=100))
