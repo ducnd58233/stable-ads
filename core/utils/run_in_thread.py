@@ -18,10 +18,33 @@ def run_async_from_sync(coro: Coroutine[None, None, T]) -> T:
     and when no loop is running.
     """
     try:
-        asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(_run_in_new_loop, coro)
+            return future.result()
     except RuntimeError:
-        return asyncio.run(coro)
+        try:
+            return asyncio.run(coro)
+        except Exception as e:
+            raise e
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(asyncio.run, coro)
-        return future.result()
+
+def _run_in_new_loop(coro: Coroutine[None, None, T]) -> T:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    except Exception as e:
+        raise e
+    finally:
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)

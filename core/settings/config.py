@@ -9,6 +9,17 @@ from functools import lru_cache
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_FILE_PATH = os.path.join(BASE_DIR, ".env")
 
+class MLflowSettings(BaseModel):
+    tracking_uri: str = Field(
+        default_factory=lambda: os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"),
+    )
+    experiment_name: str = Field(
+        default_factory=lambda: os.getenv("MLFLOW_EXPERIMENT_NAME", "purchase-prediction"),
+    )
+    registry_uri: str | None = Field(
+        default_factory=lambda: os.getenv("MLFLOW_REGISTRY_URI"),
+    )
+
 class LLMSettings(BaseModel):
     model: str = "gpt-4o-mini"
     api_key: str | None = None
@@ -104,12 +115,30 @@ class MQSettings(BaseModel):
         return self.brokers.split(",")
 
 
+class CacheSettings(BaseModel):
+    driver: str = "redis"
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 0
+    password: str | None = None
+
+    @computed_field
+    @property
+    def url(self) -> str:
+        if self.driver == "redis":
+            return f"redis://{self.host}:{self.port}/{self.db}"
+        else:
+            raise ValueError(f"Unsupported cache driver: {self.driver}")
+
+
 class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     diffuser: DiffuserSettings = Field(default_factory=DiffuserSettings)
     db: DBSettings = Field(default_factory=DBSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     mq: MQSettings = Field(default_factory=MQSettings)
+    mlflow: MLflowSettings = Field(default_factory=MLflowSettings)
+    cache: CacheSettings = Field(default_factory=CacheSettings)
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH,

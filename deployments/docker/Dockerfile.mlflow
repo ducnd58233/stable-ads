@@ -1,0 +1,31 @@
+FROM python:3.13-slim AS base
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+FROM base AS deps
+COPY pyproject.toml uv.lock /tmp/
+WORKDIR /tmp
+ENV UV_HTTP_TIMEOUT=300
+RUN uv pip install --no-cache --system --group mlflow-server
+
+FROM python:3.13-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=deps /usr/local/bin /usr/local/bin
+
+EXPOSE 5000
+
+ENV WERKZEUG_RUN_MAIN=true
+
+CMD ["mlflow", "server", \
+     "--backend-store-uri", "${MLFLOW_BACKEND_STORE_URI}", \
+     "--default-artifact-root", "${MLFLOW_DEFAULT_ARTIFACT_ROOT}", \
+     "--host", "0.0.0.0", \
+     "--port", "5000"]

@@ -29,8 +29,11 @@ conda activate stable-ads### Configure Environment Variables
 cp .env.example .env
 
 ### Start Infrastructure Services
-h
-docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -dThis will start the following services:
+```
+docker compose -f deployments/docker/local/docker-compose.yml --env-file .env up -d
+```
+
+This will start the following services:
 - PostgreSQL (database)
 - MinIO (object storage)
 - Kafka cluster (3 nodes for message queue)

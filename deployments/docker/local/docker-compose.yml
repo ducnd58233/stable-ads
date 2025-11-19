@@ -3,8 +3,9 @@ name: stable-ads
 include:
   - path: docker-compose.infra.yml
   - path: docker-compose.ads.yml
-  - path: docker-compose.data-ingestion-dags.yml
-
+  - path: docker-compose.airflow.yml
+  - path: docker-compose.ml.yml
+  
 services:
   api:
     build:
